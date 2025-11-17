@@ -1,0 +1,126 @@
+{
+  "scenarios": {
+    "baseline": {
+      "servicios": {
+        "SVC1": { "duracion": 80, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [420, 720] },
+        "SVC2": { "duracion": 50, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [480, 720] }
+      },
+      "empleados": [
+        { "empleado_id": "E1", "horario_trabajo": [390, 570] },
+        { "empleado_id": "E2", "horario_trabajo": [570, 750] }
+      ],
+      "equipos": [
+        { "equipo_id": "EQ1", "horario_operativo": [390, 570] },
+        { "equipo_id": "EQ2", "horario_operativo": [570, 750] }
+      ],
+      "horario_atencion_negocio": [390, 720],
+      "ocupaciones": [
+        { "empleado_id": "E2", "inicio": "2025-11-06T09:30:00Z", "fin": "2025-11-06T10:30:00Z" }
+      ],
+      "ocupaciones_equipo": [
+        { "equipo_id": "EQ2", "inicio": "2025-11-06T09:30:00Z", "fin": "2025-11-06T11:00:00Z" }
+      ]
+    },
+    "overlap_heavy": {
+      "servicios": {
+        "SVC1": { "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5 }
+      },
+      "empleados": [
+        { "empleado_id": "E1", "horario_trabajo": [540, 1020] },
+        { "empleado_id": "E2", "horario_trabajo": [600, 1080] }
+      ],
+      "equipos": [
+        { "equipo_id": "EQ1", "horario_operativo": [540, 1080] }
+      ],
+      "horario_atencion_negocio": [540, 1080],
+      "ocupaciones": [
+        { "empleado_id": "E1", "inicio": "2025-11-06T08:55:00Z", "fin": "2025-11-06T11:40:00Z" },
+        { "empleado_id": "E1", "inicio": "2025-11-06T12:20:00Z", "fin": "2025-11-06T13:00:00Z" },
+        { "empleado_id": "E2", "inicio": "2025-11-06T10:00:00Z", "fin": "2025-11-06T10:50:00Z" },
+        { "empleado_id": "E2", "inicio": "2025-11-06T12:30:00Z", "fin": "2025-11-06T13:30:00Z" }
+      ],
+      "ocupaciones_equipo": [
+        { "equipo_id": "EQ1", "inicio": "2025-11-06T12:00:00Z", "fin": "2025-11-06T12:45:00Z" }
+      ]
+    },
+    "night_shift": {
+      "servicios": {
+        "SVC1": {
+          "duracion": 80,
+          "buffer_previo": 5,
+          "buffer_posterior": 5,
+          "horario_atencion": [1320, 1590]
+        }
+      },
+      "empleados": [
+        { "empleado_id": "E1", "horario_trabajo": [1290, 1620] }
+      ],
+      "equipos": [
+        { "equipo_id": "EQ1", "horario_operativo": [1320, 1620] }
+      ],
+      "horario_atencion_negocio": [1320, 1620],
+      "ocupaciones": [
+        { "empleado_id": "E1", "inicio": "2025-11-06T22:00:00Z", "fin": "2025-11-06T23:30:00Z" }
+      ],
+      "ocupaciones_equipo": [
+        { "equipo_id": "EQ1", "inicio": "2025-11-06T22:00:00Z", "fin": "2025-11-06T23:30:00Z" }
+      ],
+      "excepciones": [
+        {
+          "id": "EXC-01",
+          "scope": "business",
+          "start": "2025-11-06T23:00:00Z",
+          "end": "2025-11-06T23:30:00Z",
+          "reason": "Revisión"
+        }
+      ]
+    }
+    ,
+    "pre_edge": {
+      "servicios": {
+        "SVC1": { "duracion": 80, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [420, 720] }
+      },
+      "empleados": [
+        { "empleado_id": "E_PRE", "horario_trabajo": [418, 750] }
+      ],
+      "equipos": [],
+      "horario_atencion_negocio": [420, 720],
+      "ocupaciones": []
+    }
+    ,
+    "svc_window_edge": {
+      "servicios": {
+        "SVC_EDGE": { "duracion": 80, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [600, 660] }
+      },
+      "empleados": [
+        { "empleado_id": "E_EDGE", "horario_trabajo": [570, 750] }
+      ],
+      "equipos": [
+        { "equipo_id": "EQ_EDGE", "horario_operativo": [570, 750] }
+      ],
+      "horario_atencion_negocio": [540, 720],
+      "ocupaciones": [],
+      "ocupaciones_equipo": []
+    }
+    ,
+    "business_exception_full": {
+      "servicios": {
+        "SVC1": { "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "horario_atencion": [600, 840] }
+      },
+      "empleados": [
+        { "empleado_id": "E1", "horario_trabajo": [600, 840] }
+      ],
+      "equipos": [],
+      "ocupaciones": [],
+      "excepciones": [
+        {
+          "id": "EXC-FERIADO-2025-11-06",
+          "scope": "business",
+          "start": "2025-11-06T10:00:00Z",
+          "end": "2025-11-06T14:00:00Z",
+          "reason": "Feriado"
+        }
+      ]
+    }
+  }
+}

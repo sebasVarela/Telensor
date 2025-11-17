@@ -1,0 +1,98 @@
+[
+  {
+    "name": "SolicitudDisponibilidad",
+    "kind": "class",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "status": "active"
+  },
+  {
+    "name": "SlotDisponible",
+    "kind": "class",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "status": "active"
+  },
+  {
+    "name": "RespuestaDisponibilidad",
+    "kind": "class",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "status": "active"
+  },
+  {
+    "name": "buscar_disponibilidad",
+    "kind": "fastapi_endpoint",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "wraps": "telensor_engine.engine.engine.encontrar_slots",
+    "status": "active"
+  },
+  {
+    "name": "load_scenario",
+    "kind": "function",
+    "location": {"file": "telensor_engine/fixtures.py"},
+    "module": "telensor_engine.fixtures",
+    "status": "active"
+  },
+  {
+    "name": "calcular_interseccion",
+    "kind": "function",
+    "location": {"file": "telensor_engine/engine/engine.py"},
+    "module": "telensor_engine.engine.engine",
+    "status": "active"
+  },
+  {
+    "name": "restar_intervalos",
+    "kind": "function",
+    "location": {"file": "telensor_engine/engine/engine.py"},
+    "module": "telensor_engine.engine.engine",
+    "status": "active"
+  },
+  {
+    "name": "encontrar_slots",
+    "kind": "function",
+    "location": {"file": "telensor_engine/engine/engine.py"},
+    "module": "telensor_engine.engine.engine",
+    "status": "active"
+  },
+  {
+    "name": "ServiceWindowPolicy",
+    "kind": "class",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "ExcepcionSolicitud",
+    "kind": "class",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "status": "deprecated"
+  }
+  ,
+  {
+    "name": "BusinessWindowPolicy",
+    "kind": "class",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "status": "deprecated"
+  }
+  ,
+  {
+    "name": "build_total_blockings",
+    "kind": "function",
+    "location": {"file": "telensor_engine/api/adapter.py"},
+    "module": "telensor_engine.api.adapter",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "_to_minute_range",
+    "kind": "function",
+    "location": {"file": "telensor_engine/api/adapter.py"},
+    "module": "telensor_engine.api.adapter",
+    "status": "active"
+  }
+]

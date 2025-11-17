@@ -1,0 +1,147 @@
+# **Sistema de reservación — v1**
+
+Este documento describe la lógica de negocio para un sistema de reservación avanzado.
+
+Este documento explica el **QUÉ** (la lógica de negocio). El documento API_Telensor.md explica el **CÓMO** (la implementación de la API).
+
+## **1\. Marcos de tiempo (Las 5 Capas)**
+
+1. **Horario de trabajo del empleado**: Ventana donde el empleado puede trabajar (ej. \[540, 1020\] o 9:00-17:00).  
+2. **Horario de operación del equipo**: Ventana donde el equipo puede ser operado.  
+3. **Horario de atención del negocio** (DEPRECADO): Ventana máxima donde se pueden **iniciar** servicios (ej. \[480, 1200\] o 8:00-20:00). Se mantiene por compatibilidad, pero su función operativa se reemplaza por **Excepciones** (cierres globales, feriados, reuniones).  
+4. **Horario de atención del servicio**: Ventana opcional que restringe un servicio específico (ej. "Tinte" solo de \[600, 840\] o 10:00-14:00).  
+5. **Slot del servicio**: Bloque continuo con **buffer previo \+ servicio \+ buffer posterior**.
+
+## **2\. Modelado de tiempo (Minutos Absolutos \- Eje Continuo)**
+
+A diferencia de versiones anteriores, el motor ya no opera en un solo día (0-1440). Ahora opera en un **eje de tiempo de minutos absolutos y continuos**.
+
+* La API (el "Adaptador") es responsable de traducir las fechas/horas del mundo real a este eje.  
+* **Ejemplo (Turno Nocturno):**  
+  * Petición: Buscar de 20:00 del Día 1 a 04:00 del Día 2\.  
+  * El "Día 1" va de 0 a 1439\.  
+  * El "Día 2" va de 1440 a 2879\.  
+  * La API le pedirá al motor que busque en la ventana base \[1200, 1680\].  
+    * 1200 \= 20 \* 60 (20:00 del Día 1\)  
+    * 1680 \= (24 \* 60\) \+ (4 \* 60\) (04:00 del Día 2\)
+
+El motor solo ve números (1200, 1680\) y no sabe nada de "días".
+
+## **3\. Cómo obtener los intervalos libres (Álgebra de Intervalos)**
+
+El método sigue siendo el mismo, pero ahora opera en el eje continuo (números \> 1440 son válidos).
+
+1. Define la **ventana base** (ej. \[1200, 1680\]).  
+2. Define los **ocupados** (ej. \[1300, 1330\]).  
+3. Libres \= Restar(Ventana Base, Ocupados).  
+   * Resultado: \[1200, 1300), \[1330, 1680\)
+
+## **4\. Búsqueda del horario (Estrategia Eje Continuo)**
+
+1. **Paso 0: Construcción del Eje (El Adaptador/API)**  
+   * La API recibe la petición (ej. 20:00 Día 1 a 04:00 Día 2).  
+   * La API define la ventana base: \[1200, 1680\].  
+   * La API carga los ocupados del Día 1: ej. \[1300, 1330\] (21:40-22:10).  
+   * La API carga los ocupados del Día 2: ej. \[60, 120\] (01:00-02:00).  
+   * **Paso Clave (Desfase):** La API "desfasa" los ocupados del Día 2 sumándoles 1440 (minutos del primer día).  
+     * Ocupado Día 2 se convierte en: \[60+1440, 120+1440\] \-\> \[1500, 1560\].  
+   * La API crea la lista final de ocupados\_totales \= \[\[1300, 1330\], \[1500, 1560\]\].  
+   * Estos son los datos que se pasan al motor.  
+2. **Paso 1: Definir Horario de Atención Efectivo**  
+   * El motor calcula la intersección entre la Ventana Base (del Paso 0\) y el horario específico del servicio (si existe).  
+3. **Paso 2, 3, 4: Calcular Libres Comunes**  
+   * El motor calcula los libres del empleado, los libres del equipo y la intersección (libres\_comunes) de forma normal, usando los datos del eje continuo.  
+   * Ej: Libres Comunes \= \[1200, 1300), \[1330, 1500), \[1560, 1680\)  
+4. **Paso 5: Iterar y Generar Opciones ("Empaquetado")**  
+   * Arranque alineado: el primer intento dentro de cada libre común se fija en `max(libre_ini, atencion_efectiva_ini - buffer_previo)` para garantizar que el inicio del **servicio** ocurra dentro de la ventana efectiva.  
+   * Iteración por "salto de slot": se avanza sumando `duracion_total_slot` (sin rejilla fija de 10 minutos).  
+   * Validaciones: Regla 1 (inicio de servicio dentro de atención efectiva) y Regla 2 (slot completo dentro del límite duro de trabajo del empleado).  
+   * Nota: el `buffer_previo` puede caer fuera del inicio de atención efectiva; se garantiza que `inicio_servicio` ∈ `[atencion_efectiva_ini, atencion_efectiva_fin)`.  
+   * Ejemplo: si `atencion_efectiva_ini = 480` y `buffer_previo = 10`, el primer intento se alinea a `inicio_pre = 470` (servicio a `480`).  
+  * Política de Ventana de Servicio (`service_window_policy`):  
+    - `start_only` (por defecto): el horario de atención del servicio limita únicamente el inicio del slot; el fin puede caer fuera si empleado/equipo siguen libres.  
+    - `full_slot`: el horario de atención del servicio limita inicio y fin del slot; se recortan los libres por la ventana del servicio antes del empaquetado.  
+  * Política de Ventana de Negocio: Eliminada. La ventana de negocio siempre limita el INICIO del servicio (start constraint). Los cierres y recortes operativos se gestionan mediante **Excepciones**.
+5. **Paso 6: De-traducción (El Adaptador/API)**  
+   * El motor devuelve los minutos absolutos (ej. inicio\_pre \= 1560).  
+   * La API recibe este número y lo traduce de vuelta al mundo real:  
+     * ¿1560 es mayor que 1439 (último min del Día 1)? **Sí.**  
+     * minutos\_dia\_2 \= 1560 \- 1440 \= 120\.  
+     * 120 minutos \= 02:00.  
+     * Resultado para el cliente: "Día 2, 02:00".
+
+## **5\. Gestión de Citas y Conflictos**
+
+Esta sección define cómo manejar excepciones cuando una cita existente no puede realizarse. La lógica de la "Cascada de Resolución" sigue siendo la misma que en versiones anteriores, pero ahora opera sobre los **intervalos de minutos absolutos** del eje continuo.
+
+### **1\. Modelado de Inactividad y Conflictos**
+
+* **La Inactividad es un "Ocupado" más**: La "inactividad" (ej. enfermedad de un empleado, mantenimiento de un equipo) no es un estado booleano. Se modela de forma idéntica al resto del sistema: como un **nuevo "intervalo ocupado"** que se añade al calendario del empleado o equipo (en la tabla ocupaciones para esa fecha\_base).  
+* **Excepciones del Negocio/Servicio**: Los cierres globales (feriados, reuniones) y restricciones puntuales de servicio se modelan como **Excepciones**. El Adaptador las agrega a la lista de **bloqueos totales** antes de llamar al motor, manteniendo el motor puro en álgebra de intervalos.  
+* **Detección de Conflicto**: Cuando se añade un nuevo intervalo de inactividad, el sistema debe:  
+  1. Buscar todas las citas futuras asignadas a ese empleado/equipo.  
+  2. Verificar si el *slot completo* (minuto absoluto) de alguna cita se solapa con el nuevo intervalo de inactividad.  
+  3. Toda cita que se solape se marca como "**EN CONFLICTO**" y debe ser resuelta.
+
+### **2\. Cascada de Resolución de Conflictos**
+
+El sistema debe intentar resolver el conflicto automáticamente siguiendo esta jerarquía:
+
+**A. Reasignar (Prioridad 1: Mismo Horario, Mínimo Cambio)**
+
+* **Objetivo**: Mantener el horario del cliente intacto.  
+* **Lógica**: El sistema busca una solución de "cambio mínimo" para el *mismo slot de tiempo absoluto exacto*.  
+* **Caso 1: Falla el Empleado (E1)**  
+  * *Cita original*: \[E1, EQ1, Slot\_Absoluto\]  
+  * *El sistema busca*: \[\*\*E2\*\*, EQ1, Slot\_Absoluto\]  
+  * (Es decir: Otro Empleado libre \+ Mismo Equipo \+ Mismo Slot)  
+* **Caso 2: Falla el Equipo (EQ1)**  
+  * *Cita original*: \[E1, EQ1, Slot\_Absoluto\]  
+  * *El sistema busca*: \[E1, \*\*EQ2\*\*, Slot\_Absoluto\]  
+  * (Es decir: Mismo Empleado \+ Otro Equipo libre \+ Mismo Slot)  
+* **Resultado**: Si se encuentra un match, la cita se actualiza. Esta acción puede ser automática, requiriendo solo una notificación al cliente (ej. "Ahora te atenderá Ana en lugar de Juan").
+
+**B. Reagendar (Prioridad 2: Nuevo Horario)**
+
+* **Activación**: Si "Reasignar" (mismo horario) falla.  
+* **Lógica**: El sistema libera el slot en conflicto y realiza una **búsqueda de disponibilidad completamente nueva** (usando la Estrategia Eje Continuo).  
+* **Resultado**: Esto implica un **nuevo horario** y potencialmente un nuevo empleado y/o equipo.  
+* **Acción Requerida**: Esta acción **requiere confirmación del cliente**, ya que su horario cambia. El sistema debe *proponer* los nuevos slots libres encontrados.
+
+**C. Cancelar (Última opción)**
+
+* **Activación**: Si el cliente no acepta la "reagenda" o si el cliente lo solicita directamente.  
+* **Lógica**: El sistema simplemente elimina el "intervalo ocupado" que representaba la cita de los calendarios del empleado y equipo originales.
+
+## **6\. Horarios por Día (dia_semana) y Ventana Efectiva**
+
+La API calcula el `dia_semana` a partir de la `fecha_base` de la solicitud y usa ese valor para cargar horarios diarios específicos:
+
+- **HorarioServicio**: si existe para el `dia_semana`, se establece en el dominio como `horario_atencion_especifico` del servicio. El motor intersecta la ventana base con este intervalo para definir la **ventana efectiva de atención**.
+- **HorarioEmpleado**: si existe para el `dia_semana`, se usa como `horario_trabajo` del empleado; si no existe, se **hace fallback** al intervalo general (ventana base) para ese empleado en el día.
+
+Efectos sobre la búsqueda:
+
+- La **ventana efectiva** de búsqueda se reduce por la intersección entre: ventana base (eje continuo) ∩ `horario_atencion_especifico` del servicio (si presente).  
+- Los **libres del empleado** se calculan dentro de su `horario_trabajo` del día, manteniendo la coherencia con el eje continuo.  
+- Si un empleado no tiene horario para ese día, el sistema no bloquea la búsqueda, pero su disponibilidad se limita por la ventana base.
+
+Ejemplo rápido:
+
+- `dia_semana = 2` (Miércoles); Servicio A tiene `HorarioServicio[2] = [600, 840]` (10:00–14:00).  
+- Ventana base: `[480, 1200]` (8:00–20:00).  
+- Ventana efectiva: `[600, 840]` (intersección).  
+- Con `service_window_policy = start_only`, se valida que el inicio del servicio caiga dentro de `[600, 840]`. Con `full_slot`, además se recortan los libres por `[600, 840]` para forzar que el fin del slot también caiga dentro.  
+- Empleado E1 tiene `HorarioEmpleado[2] = [540, 1020]` (9:00–17:00): sus libres se calculan dentro de `[540, 1020]` pero el motor sólo considera la intersección con la ventana efectiva del servicio.
+\
+## **7\. Modelo de Excepciones y Agregación de Bloqueos (Fase 1)**
+
+- **Disponibilidad Bruta**: `servicio ∩ empleado ∩ equipo` en el eje continuo de minutos absolutos.  
+- **Bloqueos Totales**: Unión de ocupaciones (reservas existentes, inactividad de empleado, mantenimiento de equipo) + **Excepciones** (feriados, cierres globales, restricciones puntuales de servicio).  
+- **Agregador del Adaptador**: `telensor_engine.api.adapter.build_total_blockings` traduce fechas al eje, combina bloqueos por empleado, por equipo y globales, y los aplica antes del empaquetado.  
+- **Ventaja**: El motor permanece puro (álgebra de intervalos), mientras que el Adaptador configura contexto operativo y políticas.
+\
+### **Fuente de Excepciones**
+
+- Las excepciones deben definirse en `docs/test_scenarios.json` (para pruebas) o en la fuente de datos externa (p. ej., Directus) para producción.
+- El endpoint no acepta excepciones en el cuerpo de la solicitud; se agregan vía escenario o capa de datos.

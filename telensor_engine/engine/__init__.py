@@ -1,0 +1,1 @@
+"""Módulo del Motor (lógica pura)."""
