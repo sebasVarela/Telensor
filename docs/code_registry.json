@@ -57,6 +57,14 @@
     "status": "active"
   },
   {
+    "name": "gestionar_busqueda_disponibilidad",
+    "kind": "function",
+    "location": {"file": "telensor_engine/api/adapter.py"},
+    "module": "telensor_engine.api.adapter",
+    "wraps": "telensor_engine.engine.engine.encontrar_slots",
+    "status": "active"
+  },
+  {
     "name": "ServiceWindowPolicy",
     "kind": "class",
     "location": {"file": "telensor_engine/main.py"},

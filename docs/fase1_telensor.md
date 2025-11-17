@@ -53,6 +53,7 @@
      async def buscar\_disponibilidad(solicitud: SolicitudDisponibilidad):  
          \# Lógica (aún no hecha)  
          return {"horarios\_disponibles": \[\]}
+   * Patrón Director/Gerente: el endpoint actuará como Director y delegará la lógica de negocio en `telensor_engine.api.adapter.gestionar_busqueda_disponibilidad` (Gerente) para reutilización y mejores pruebas.
 
 5. **Crear el Módulo de Mocking (mock\_db.py):**  
    * Crear funciones que simulen las llamadas a Directus. Esto es **crucial** para probar la Fase 1\.  

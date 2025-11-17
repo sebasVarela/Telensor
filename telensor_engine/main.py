@@ -18,6 +18,7 @@ from .mock_db import (
 )
 from .fixtures import load_scenario
 from .api.adapter import build_total_blockings
+from .api.adapter import gestionar_busqueda_disponibilidad
 
 app = FastAPI(title="Telensor Engine API", version="0.1.0")
 logging.basicConfig(level=logging.INFO)
@@ -62,6 +63,24 @@ async def buscar_disponibilidad(solicitud: SolicitudDisponibilidad) -> Respuesta
     # Validación básica del rango
     if solicitud.fecha_fin_utc <= solicitud.fecha_inicio_utc:
         raise HTTPException(status_code=400, detail="Rango de fechas inválido")
+
+    # Delegación al Gerente: toda la lógica pesada vive en el adaptador.
+    resultados_dict = gestionar_busqueda_disponibilidad(
+        solicitud,
+        get_servicio_fn=get_servicio,
+        get_horarios_empleados_fn=get_horarios_empleados,
+        get_ocupaciones_fn=get_ocupaciones,
+    )
+    resultados_gerente: List[SlotDisponible] = [
+        SlotDisponible(
+            inicio_slot=item["inicio_slot"],
+            fin_slot=item["fin_slot"],
+            empleado_id_asignado=item.get("empleado_id_asignado"),
+            equipo_id_asignado=item.get("equipo_id_asignado"),
+        )
+        for item in resultados_dict
+    ]
+    return RespuestaDisponibilidad(horarios_disponibles=resultados_gerente)
 
     # Paso 0: Construcción del eje continuo
     inicio_dt = pendulum.instance(solicitud.fecha_inicio_utc).in_timezone("UTC")

@@ -141,6 +141,12 @@ Ejemplo rápido:
 - **Agregador del Adaptador**: `telensor_engine.api.adapter.build_total_blockings` traduce fechas al eje, combina bloqueos por empleado, por equipo y globales, y los aplica antes del empaquetado.  
 - **Ventaja**: El motor permanece puro (álgebra de intervalos), mientras que el Adaptador configura contexto operativo y políticas.
 \
+### **Patrón Director/Gerente**
+
+- **Director (API)**: `telensor_engine.main.buscar_disponibilidad` valida la entrada HTTP y delega la lógica de negocio.  
+- **Gerente (Adaptador)**: `telensor_engine.api.adapter.gestionar_busqueda_disponibilidad` realiza la carga del escenario, aplica políticas (`ServiceWindowPolicy`), agrega bloqueos, calcula ventanas efectivas y empaqueta los slots usando `encontrar_slots`.  
+- **Beneficio**: Reutilización de la lógica en Fase 2 (Cascada de Resolución de Conflictos) sin duplicar código y con mejor testabilidad.
+\
 ### **Fuente de Excepciones**
 
 - Las excepciones deben definirse en `docs/test_scenarios.json` (para pruebas) o en la fuente de datos externa (p. ej., Directus) para producción.
