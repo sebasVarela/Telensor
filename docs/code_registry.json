@@ -103,4 +103,93 @@
     "module": "telensor_engine.api.adapter",
     "status": "active"
   }
+  ,
+  {
+    "name": "gestionar_creacion_reserva",
+    "kind": "function",
+    "location": {"file": "telensor_engine/api/adapter.py"},
+    "module": "telensor_engine.api.adapter",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "crear_reserva",
+    "kind": "fastapi_endpoint",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "wraps": "telensor_engine.api.adapter.gestionar_creacion_reserva",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "SolicitudReserva",
+    "kind": "class",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "ReservaCreada",
+    "kind": "class",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "Reserva",
+    "kind": "dataclass",
+    "location": {"file": "telensor_engine/mock_state.py"},
+    "module": "telensor_engine.mock_state",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "reset_state",
+    "kind": "function",
+    "location": {"file": "telensor_engine/mock_state.py"},
+    "module": "telensor_engine.mock_state",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "list_reservas",
+    "kind": "function",
+    "location": {"file": "telensor_engine/mock_state.py"},
+    "module": "telensor_engine.mock_state",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "get_reservas_en_rango",
+    "kind": "function",
+    "location": {"file": "telensor_engine/mock_state.py"},
+    "module": "telensor_engine.mock_state",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "has_conflict",
+    "kind": "function",
+    "location": {"file": "telensor_engine/mock_state.py"},
+    "module": "telensor_engine.mock_state",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "add_reserva",
+    "kind": "function",
+    "location": {"file": "telensor_engine/mock_state.py"},
+    "module": "telensor_engine.mock_state",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "get_horarios_empleados",
+    "kind": "function",
+    "location": {"file": "telensor_engine/mock_db.py"},
+    "module": "telensor_engine.mock_db",
+    "status": "active"
+  }
 ]

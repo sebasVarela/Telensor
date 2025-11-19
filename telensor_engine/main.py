@@ -19,6 +19,7 @@ from .mock_db import (
 from .fixtures import load_scenario
 from .api.adapter import build_total_blockings
 from .api.adapter import gestionar_busqueda_disponibilidad
+from .api.adapter import gestionar_creacion_reserva
 
 app = FastAPI(title="Telensor Engine API", version="0.1.0")
 logging.basicConfig(level=logging.INFO)
@@ -55,6 +56,40 @@ class SlotDisponible(BaseModel):
 
 class RespuestaDisponibilidad(BaseModel):
     horarios_disponibles: List[SlotDisponible] = []
+
+
+class SolicitudReserva(BaseModel):
+    """Modelo de entrada para crear una reserva.
+
+    Comentarios:
+    - `inicio_slot` y `fin_slot` deben corresponder exactamente a la duración
+      total del servicio (duración + buffers) para el `servicio_id` indicado.
+    - `empleado_id` es obligatorio; `equipo_id` es opcional.
+    - `service_window_policy` se mantiene para coherencia con la búsqueda.
+    - `scenario_id` permite reproducir escenarios de pruebas.
+    """
+
+    servicio_id: str
+    empleado_id: str
+    equipo_id: Optional[str] = None
+    inicio_slot: datetime
+    fin_slot: datetime
+    scenario_id: Optional[str] = None
+    service_window_policy: ServiceWindowPolicy = ServiceWindowPolicy.start_only
+
+
+class ReservaCreada(BaseModel):
+    """Salida estándar tras creación exitosa de una reserva."""
+
+    reserva_id: str
+    estado: str = Field(default="confirmada")
+    servicio_id: str
+    empleado_id: str
+    equipo_id: Optional[str] = None
+    inicio_slot: datetime
+    fin_slot: datetime
+    creada_en: datetime
+    version: int = 1
 
 
 @app.post("/api/v1/disponibilidad", response_model=RespuestaDisponibilidad)
@@ -245,3 +280,30 @@ async def buscar_disponibilidad(solicitud: SolicitudDisponibilidad) -> Respuesta
     # Ordenar por inicio de slot
     resultados.sort(key=lambda s: s.inicio_slot)
     return RespuestaDisponibilidad(horarios_disponibles=resultados)
+
+
+@app.post("/api/v1/reservas", response_model=ReservaCreada, status_code=201)
+async def crear_reserva(solicitud: SolicitudReserva) -> ReservaCreada:
+    """Crea una reserva validando disponibilidad y previniendo colisiones.
+
+    Este endpoint actúa como "Director" y delega en el Gerente
+    `gestionar_creacion_reserva` toda la lógica de negocio.
+    """
+    # Validación básica del rango
+    if solicitud.fin_slot <= solicitud.inicio_slot:
+        raise HTTPException(status_code=400, detail="Rango de fechas inválido para la reserva")
+
+    try:
+        creada = gestionar_creacion_reserva(
+            solicitud,
+            get_servicio_fn=get_servicio,
+            get_horarios_empleados_fn=get_horarios_empleados,
+            get_ocupaciones_fn=get_ocupaciones,
+        )
+    except ValueError as e:
+        msg = str(e)
+        if "Conflicto" in msg or "conflicto" in msg:
+            raise HTTPException(status_code=409, detail="Conflicto: el slot ya no está disponible")
+        raise HTTPException(status_code=400, detail=msg or "Error de validación en la creación de reserva")
+
+    return ReservaCreada(**creada)

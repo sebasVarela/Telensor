@@ -6,8 +6,8 @@
         "SVC2": { "duracion": 50, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [480, 720] }
       },
       "empleados": [
-        { "empleado_id": "E1", "horario_trabajo": [390, 570] },
-        { "empleado_id": "E2", "horario_trabajo": [570, 750] }
+        { "empleado_id": "E1", "horario_trabajo": [390, 570], "servicios_asignados": ["SVC1", "SVC2"], "equipos_asignados": ["EQ1", "EQ2"] },
+        { "empleado_id": "E2", "horario_trabajo": [570, 750], "servicios_asignados": ["SVC1"], "equipos_asignados": ["EQ2"] }
       ],
       "equipos": [
         { "equipo_id": "EQ1", "horario_operativo": [390, 570] },
@@ -26,8 +26,8 @@
         "SVC1": { "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5 }
       },
       "empleados": [
-        { "empleado_id": "E1", "horario_trabajo": [540, 1020] },
-        { "empleado_id": "E2", "horario_trabajo": [600, 1080] }
+        { "empleado_id": "E1", "horario_trabajo": [540, 1020], "servicios_asignados": ["SVC1"], "equipos_asignados": ["EQ1"] },
+        { "empleado_id": "E2", "horario_trabajo": [600, 1080], "servicios_asignados": ["SVC1"], "equipos_asignados": ["EQ1"] }
       ],
       "equipos": [
         { "equipo_id": "EQ1", "horario_operativo": [540, 1080] }
@@ -53,7 +53,7 @@
         }
       },
       "empleados": [
-        { "empleado_id": "E1", "horario_trabajo": [1290, 1620] }
+        { "empleado_id": "E1", "horario_trabajo": [1290, 1620], "servicios_asignados": ["SVC1"], "equipos_asignados": ["EQ1"] }
       ],
       "equipos": [
         { "equipo_id": "EQ1", "horario_operativo": [1320, 1620] }
@@ -81,7 +81,7 @@
         "SVC1": { "duracion": 80, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [420, 720] }
       },
       "empleados": [
-        { "empleado_id": "E_PRE", "horario_trabajo": [418, 750] }
+        { "empleado_id": "E_PRE", "horario_trabajo": [418, 750], "servicios_asignados": ["SVC1"], "equipos_asignados": [] }
       ],
       "equipos": [],
       "horario_atencion_negocio": [420, 720],
@@ -93,7 +93,7 @@
         "SVC_EDGE": { "duracion": 80, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [600, 660] }
       },
       "empleados": [
-        { "empleado_id": "E_EDGE", "horario_trabajo": [570, 750] }
+        { "empleado_id": "E_EDGE", "horario_trabajo": [570, 750], "servicios_asignados": ["SVC_EDGE"], "equipos_asignados": ["EQ_EDGE"] }
       ],
       "equipos": [
         { "equipo_id": "EQ_EDGE", "horario_operativo": [570, 750] }
@@ -108,7 +108,7 @@
         "SVC1": { "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "horario_atencion": [600, 840] }
       },
       "empleados": [
-        { "empleado_id": "E1", "horario_trabajo": [600, 840] }
+        { "empleado_id": "E1", "horario_trabajo": [600, 840], "servicios_asignados": ["SVC1"], "equipos_asignados": [] }
       ],
       "equipos": [],
       "ocupaciones": [],

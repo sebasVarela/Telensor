@@ -31,7 +31,7 @@ def test_api_baseline_returns_slots(monkeypatch):
     monkeypatch.setattr(
         api,
         "get_horarios_empleados",
-        lambda fecha: [
+        lambda fecha, servicio_id=None, equipo_id=None: [
             {"empleado_id": "E1", "horario_trabajo": [540, 1020]},
             {"empleado_id": "E2", "horario_trabajo": [600, 1080]},
         ],
@@ -71,7 +71,7 @@ def test_api_filter_by_employee(monkeypatch):
     monkeypatch.setattr(
         api,
         "get_horarios_empleados",
-        lambda fecha: [
+        lambda fecha, servicio_id=None, equipo_id=None: [
             {"empleado_id": "E1", "horario_trabajo": [540, 1020]},
             {"empleado_id": "E2", "horario_trabajo": [600, 1080]},
         ],
@@ -99,7 +99,7 @@ def test_api_heavy_occupancy_returns_empty(monkeypatch):
     monkeypatch.setattr(
         api,
         "get_horarios_empleados",
-        lambda fecha: [
+        lambda fecha, servicio_id=None, equipo_id=None: [
             {"empleado_id": "E1", "horario_trabajo": [540, 1020]},
             {"empleado_id": "E2", "horario_trabajo": [600, 1080]},
         ],
@@ -129,7 +129,7 @@ def test_api_cross_midnight_slots(monkeypatch):
     monkeypatch.setattr(
         api,
         "get_horarios_empleados",
-        lambda fecha: [
+        lambda fecha, servicio_id=None, equipo_id=None: [
             {"empleado_id": "N1", "horario_trabajo": [0, 120]},
         ],
     )
@@ -152,7 +152,7 @@ def test_api_cross_midnight_slots(monkeypatch):
 def test_api_equipment_id_passthrough(monkeypatch):
     from telensor_engine import main as api
 
-    monkeypatch.setattr(api, "get_horarios_empleados", lambda fecha: [{"empleado_id": "E1", "horario_trabajo": [540, 1020]}])
+    monkeypatch.setattr(api, "get_horarios_empleados", lambda fecha, servicio_id=None, equipo_id=None: [{"empleado_id": "E1", "horario_trabajo": [540, 1020]}])
     monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5})
     monkeypatch.setattr(api, "get_ocupaciones", lambda e, fi, ff: [])
 
@@ -167,6 +167,23 @@ def test_api_equipment_id_passthrough(monkeypatch):
     slots = resp.json()["horarios_disponibles"]
     assert len(slots) >= 1
     assert all(sl["equipo_id_asignado"] == "EQ1" for sl in slots)
+
+
+def test_api_strict_filter_returns_empty_when_no_qualified_employees():
+    """Con modo estricto, si ningún empleado califica por servicio/equipo, no hay slots."""
+    # Usamos la función por defecto de mock_db (sin monkeypatch) para filtrar:
+    # - E1: servicios [SVC1,SVC2], equipos [EQ1]
+    # - E2: servicios [SVC2], equipos [EQ1,EQ2]
+    # Para servicio SVC1 con equipo EQ2, ningún empleado cumple ambos filtros.
+    payload = {
+        "servicio_id": "SVC1",
+        "equipo_id": "EQ2",
+        "fecha_inicio_utc": "2025-11-06T10:00:00Z",
+        "fecha_fin_utc": "2025-11-06T11:00:00Z",
+    }
+    resp = client.post("/api/v1/disponibilidad", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["horarios_disponibles"] == []
 
 
 def test_api_invalid_range_returns_400():

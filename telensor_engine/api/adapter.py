@@ -12,6 +12,7 @@ from telensor_engine.engine.engine import (
     encontrar_slots,
 )
 from telensor_engine.fixtures import load_scenario
+from telensor_engine import mock_state as mock_state
 from telensor_engine.mock_db import (
     get_servicio as default_get_servicio,
     get_horarios_empleados as default_get_horarios_empleados,
@@ -131,6 +132,20 @@ def build_total_blockings(
                 # Una excepción a nivel servicio afecta a todos los empleados y equipos
                 bloqueos_globales.append(rng)
 
+    # 4) Reservas en memoria (anti-colisión): se consideran como bloqueos.
+    #    Esto garantiza que las disponibilidades reflejen inmediatamente las
+    #    reservas creadas durante las pruebas E2E.
+    reservas = mock_state.get_reservas_en_rango(inicio_dt, fin_dt)
+    for r in reservas:
+        # Bloqueo por empleado
+        if r.empleado_id in bloqueos_empleado:
+            rng = _to_minute_range(base_midnight, r.inicio_slot, r.fin_slot)
+            bloqueos_empleado[r.empleado_id].append(rng)
+        # Bloqueo por equipo (si aplica)
+        if equipo_id and r.equipo_id == equipo_id:
+            rng = _to_minute_range(base_midnight, r.inicio_slot, r.fin_slot)
+            bloqueos_equipo.setdefault(equipo_id, []).append(rng)
+
     return bloqueos_empleado, bloqueos_equipo, bloqueos_globales
 
 
@@ -138,7 +153,7 @@ def gestionar_busqueda_disponibilidad(
     solicitud: Any,
     *,
     get_servicio_fn: Optional[Callable[[str], Dict[str, Any]]] = None,
-    get_horarios_empleados_fn: Optional[Callable[[Any], List[Dict[str, Any]]]] = None,
+    get_horarios_empleados_fn: Optional[Callable[..., List[Dict[str, Any]]]] = None,
     get_ocupaciones_fn: Optional[Callable[[List[str], Any, Any], List[Dict[str, Any]]]] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -191,8 +206,22 @@ def gestionar_busqueda_disponibilidad(
     get_horarios_empleados = get_horarios_empleados_fn or default_get_horarios_empleados
     if escenario and "empleados" in escenario:
         horarios = escenario["empleados"]
+        # Si el escenario define asignaciones por empleado, aplicar filtrado estricto
+        serv_key_present = any("servicios_asignados" in h for h in horarios)
+        eq_key_present = any("equipos_asignados" in h for h in horarios)
+        if serv_key_present and solicitud.servicio_id:
+            horarios = [h for h in horarios if solicitud.servicio_id in h.get("servicios_asignados", [])]
+        if eq_key_present and getattr(solicitud, "equipo_id", None):
+            horarios = [h for h in horarios if getattr(solicitud, "equipo_id", None) in h.get("equipos_asignados", [])]
+        if not horarios:
+            return []
     else:
-        horarios = get_horarios_empleados(base_midnight)
+        # Pasar filtros de servicio/equipo para asegurar empleados válidos
+        horarios = get_horarios_empleados(
+            base_midnight,
+            servicio_id=solicitud.servicio_id,
+            equipo_id=getattr(solicitud, "equipo_id", None),
+        )
     if getattr(solicitud, "empleado_id", None):
         horarios = [h for h in horarios if h.get("empleado_id") == solicitud.empleado_id]
         if not horarios:
@@ -310,3 +339,129 @@ def gestionar_busqueda_disponibilidad(
 
     resultados.sort(key=lambda s: s["inicio_slot"])  # ordenar por inicio
     return resultados
+
+
+def gestionar_creacion_reserva(
+    solicitud: Any,
+    *,
+    get_servicio_fn: Optional[Callable[[str], Dict[str, Any]]] = None,
+    get_horarios_empleados_fn: Optional[Callable[[Any], List[Dict[str, Any]]]] = None,
+    get_ocupaciones_fn: Optional[Callable[[List[str], Any, Any], List[Dict[str, Any]]]] = None,
+) -> Dict[str, Any]:
+    """
+    Gerente de creación de reservas con doble chequeo anti-colisión.
+
+    - Valida rango y coherencia con el servicio.
+    - Reusa el gerente de disponibilidad para confirmar el slot.
+    - Revalida contra memoria simulada y crea la reserva.
+    """
+    logging.info(
+        "Gerente(creación): servicio=%s, empleado=%s, equipo=%s, inicio=%s, fin=%s, escenario=%s",
+        getattr(solicitud, "servicio_id", None),
+        getattr(solicitud, "empleado_id", None),
+        getattr(solicitud, "equipo_id", None),
+        getattr(solicitud, "inicio_slot", None),
+        getattr(solicitud, "fin_slot", None),
+        getattr(solicitud, "scenario_id", None),
+    )
+
+    if solicitud.fin_slot <= solicitud.inicio_slot:
+        raise ValueError("Rango inválido: fin_slot debe ser mayor que inicio_slot")
+
+    # Servicio y cálculo de duración total
+    # Servicio: preferir definición del escenario si existe
+    escenario = load_scenario(getattr(solicitud, "scenario_id", None)) if getattr(solicitud, "scenario_id", None) else None
+    get_servicio = get_servicio_fn or default_get_servicio
+    if escenario and "servicios" in escenario and solicitud.servicio_id in escenario["servicios"]:
+        svc = escenario["servicios"][solicitud.servicio_id]
+    else:
+        svc = get_servicio(solicitud.servicio_id)
+    if not svc:
+        raise ValueError("Servicio no encontrado")
+
+    duracion = int(svc.get("duracion", 0))
+    buffer_previo = int(svc.get("buffer_previo", 0))
+    buffer_posterior = int(svc.get("buffer_posterior", 0))
+    duracion_total_slot = duracion + buffer_previo + buffer_posterior
+
+    delta_min = int((solicitud.fin_slot - solicitud.inicio_slot).total_seconds() // 60)
+    if delta_min != duracion_total_slot:
+        raise ValueError("Rango del slot no coincide con duración+buffers del servicio")
+
+    # Construir solicitud mínima de disponibilidad centrada en el slot
+    solicitud_disp = {
+        "servicio_id": solicitud.servicio_id,
+        "empleado_id": getattr(solicitud, "empleado_id", None),
+        "equipo_id": getattr(solicitud, "equipo_id", None),
+        "scenario_id": getattr(solicitud, "scenario_id", None),
+        "fecha_inicio_utc": solicitud.inicio_slot,
+        "fecha_fin_utc": solicitud.fin_slot,
+        "service_window_policy": getattr(solicitud, "service_window_policy", "start_only"),
+    }
+
+    # Chequeo de conflicto primero: si existe, retornar 409 desde la API
+    if mock_state.has_conflict(
+        empleado_id=solicitud.empleado_id,
+        equipo_id=getattr(solicitud, "equipo_id", None),
+        inicio_dt=solicitud.inicio_slot,
+        fin_dt=solicitud.fin_slot,
+    ):
+        # Se detecta una colisión inmediata; el slot está ocupado.
+        raise ValueError("Conflicto: el slot ya no está disponible")
+
+    # Si no hay conflicto, confirmar que el slot solicitado sigue siendo válido
+    slots_libres = gestionar_busqueda_disponibilidad(
+        solicitud=type("_S", (), solicitud_disp)(),
+        get_servicio_fn=get_servicio_fn,
+        get_horarios_empleados_fn=get_horarios_empleados_fn,
+        get_ocupaciones_fn=get_ocupaciones_fn,
+    )
+
+    # Coincidencia exacta del slot solicitado
+    def _match(slot: Dict[str, Any]) -> bool:
+        # Comparación robusta de tiempos (normalizar a UTC y tipo pendulum)
+        s_ini = pendulum.instance(slot.get("inicio_slot")).in_timezone("UTC")
+        s_fin = pendulum.instance(slot.get("fin_slot")).in_timezone("UTC")
+        rq_ini = pendulum.instance(solicitud.inicio_slot).in_timezone("UTC")
+        rq_fin = pendulum.instance(solicitud.fin_slot).in_timezone("UTC")
+        if s_ini != rq_ini:
+            return False
+        if s_fin != rq_fin:
+            return False
+        if solicitud.empleado_id and slot.get("empleado_id_asignado") != solicitud.empleado_id:
+            return False
+        if getattr(solicitud, "equipo_id", None) and slot.get("equipo_id_asignado") != solicitud.equipo_id:
+            return False
+        return True
+
+    candidato = next((s for s in slots_libres if _match(s)), None)
+    if not candidato:
+        # Re-chequeo inmediato: si ahora hay conflicto en memoria, mapear a 409
+        if mock_state.has_conflict(
+            empleado_id=solicitud.empleado_id,
+            equipo_id=getattr(solicitud, "equipo_id", None),
+            inicio_dt=solicitud.inicio_slot,
+            fin_dt=solicitud.fin_slot,
+        ):
+            raise ValueError("Conflicto: el slot ya no está disponible")
+        raise ValueError("El slot solicitado no está disponible")
+
+    # Inserción en memoria
+    nueva = mock_state.add_reserva(
+        servicio_id=solicitud.servicio_id,
+        empleado_id=solicitud.empleado_id,
+        equipo_id=getattr(solicitud, "equipo_id", None),
+        inicio_slot=solicitud.inicio_slot,
+        fin_slot=solicitud.fin_slot,
+    )
+
+    return {
+        "reserva_id": nueva.reserva_id,
+        "servicio_id": nueva.servicio_id,
+        "empleado_id": nueva.empleado_id,
+        "equipo_id": nueva.equipo_id,
+        "inicio_slot": nueva.inicio_slot,
+        "fin_slot": nueva.fin_slot,
+        "creada_en": nueva.creada_en,
+        "version": nueva.version,
+    }

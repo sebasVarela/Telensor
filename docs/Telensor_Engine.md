@@ -151,3 +151,56 @@ Ejemplo rápido:
 
 - Las excepciones deben definirse en `docs/test_scenarios.json` (para pruebas) o en la fuente de datos externa (p. ej., Directus) para producción.
 - El endpoint no acepta excepciones en el cuerpo de la solicitud; se agregan vía escenario o capa de datos.
+
+## **8. Creación de Reservas (Fase 2, Sprint 1)**
+
+- **Endpoint**: `POST /api/v1/reservas`  
+  - Director: `telensor_engine.main.crear_reserva`  
+  - Gerente: `telensor_engine.api.adapter.gestionar_creacion_reserva`  
+  - Entrada: `SolicitudReserva` (servicio_id, empleado_id, inicio_slot, fin_slot, scenario_id, service_window_policy).  
+  - Salida: `ReservaCreada` (reserva_id, servicio_id, empleado_id, equipo_id?, inicio_slot, fin_slot, creada_en, version).
+
+- **Doble Chequeo Anti-colisión**:  
+  1) Chequeo inmediato de conflicto en memoria (`mock_state.has_conflict`). Si existe, se devuelve 409.  
+  2) Confirmación de validez del slot con el Gerente de disponibilidad (misma política de ventana, escenario y buffers). Si el slot deja de ser válido, se devuelve 400.
+
+- **Bloqueos por Reservas**:  
+  `build_total_blockings` agrega las reservas existentes en memoria como bloqueos del empleado y del equipo. La disponibilidad se actualiza inmediatamente tras una creación.
+
+## **9. Política de Servicio: start_only vs full_slot**
+
+- `start_only` (por defecto):  
+  - Restringe únicamente el inicio del servicio por la ventana del servicio.  
+  - El fin del slot puede exceder la ventana si el empleado/equipo están libres.  
+  - Útil para servicios con buffers que pueden caer fuera de la ventana de atención.
+
+- `full_slot`:  
+  - Restringe inicio y fin del slot por la ventana del servicio.  
+  - Se recortan los libres por la ventana del servicio antes del empaquetado.  
+  - Útil para servicios que deben concluir dentro de la ventana (operación estricta).
+
+- **Validación y Tests**:  
+  - Se incluye un test `test_manager_start_only_allows_end_past_service_window` que valida que `start_only` permite que el fin del slot exceda la ventana de servicio en el escenario `svc_window_edge`.  
+  - Para creación de reservas, se mantiene la misma política utilizada en la búsqueda para coherencia.
+
+## **10. Pruebas de Carrera y Concurrencia**
+
+- **Objetivo**: garantizar que la creación de reservas es segura bajo acceso concurrente y que el sistema devuelve `409 Conflict` cuando otro proceso ya creó el mismo slot.  
+- **Mecánica**: `telensor_engine.mock_state` implementa un `Lock` que protege la sección crítica de inserción; además, el Gerente (`gestionar_creacion_reserva`) realiza un doble chequeo: conflicto inmediato y validación de disponibilidad.
+
+- **Pruebas incluidas**:  
+  - `test_concurrent_reservas_same_slot_only_one_success_api`: simula múltiples `POST /api/v1/reservas` concurrentes contra el mismo slot y valida que solo una petición obtiene `201 Created` y el resto `409 Conflict`.  
+  - `test_concurrent_add_reserva_lock_enforced_unit`: dispara llamadas concurrentes a `mock_state.add_reserva` y verifica que el `Lock` evita duplicados, resultando en una sola reserva creada.
+
+- **Resultados**: la suite de pruebas de carrera pasa y confirma la robustez del mecanismo anti-colisión en API y a nivel de estado en memoria.
+
+## **11. Asignación de Servicios y Equipos por Empleado**
+
+- **Objetivo**: garantizar que la búsqueda de disponibilidad solo considere empleados calificados para el servicio solicitado y con permiso para el equipo indicado.
+- **Fuente de Datos (Simulada)**: `telensor_engine/mock_db.py` ahora define por empleado:
+  - `servicios_asignados`: lista de IDs de servicios que puede realizar.
+  - `equipos_asignados`: lista de IDs de equipos que puede usar.
+- **Consulta de Horarios (Modo Estricto)**: `get_horarios_empleados(fecha, servicio_id?, equipo_id?)` aplica filtros opcionales y retorna únicamente empleados que cumplan ambos filtros (si están presentes). Si los filtros dejan la lista vacía, retorna **lista vacía**.
+- **Gerente de Disponibilidad**: `telensor_engine/api/adapter.py` en `gestionar_busqueda_disponibilidad` pasa explícitamente `servicio_id` y `equipo_id` a `get_horarios_empleados`, asegurando que la disponibilidad solo se calcule para empleados válidos.
+- **Efecto en la API**: al solicitar disponibilidad con `servicio_id` y opcionalmente `equipo_id`, los slots devueltos siempre asignarán empleados calificados y equipos permitidos, reforzando la integridad operativa.
+ - **Escenarios con Asignaciones**: `docs/test_scenarios.json` puede definir por empleado `servicios_asignados` y `equipos_asignados`. Cuando estas claves existen en el escenario cargado, el Gerente aplica filtrado estricto sobre los empleados del escenario para respetar dichas asignaciones. Si dichas claves no están presentes, se mantiene compatibilidad sin filtrado adicional.
