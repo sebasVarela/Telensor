@@ -40,7 +40,6 @@ def test_manager_night_shift_full_slot_end_limit():
         servicio_id="SVC1",
         scenario_id="night_shift",
         empleado_id="E1",
-        equipo_id="EQ1",
         fecha_inicio_utc=_iso_to_dt("2025-11-06T23:20:00Z"),
         fecha_fin_utc=_iso_to_dt("2025-11-07T02:50:00Z"),
         service_window_policy="full_slot",
@@ -56,6 +55,7 @@ def test_manager_start_only_allows_end_past_service_window():
     solicitud = SolicitudDisponibilidad(
         servicio_id="SVC_EDGE",
         scenario_id="svc_window_edge",
+        empleado_id="E_EDGE",
         fecha_inicio_utc=_iso_to_dt("2025-11-06T10:00:00Z"),
         fecha_fin_utc=_iso_to_dt("2025-11-06T12:00:00Z"),
         service_window_policy="start_only",

@@ -25,6 +25,7 @@ def test_api_baseline_returns_slots(monkeypatch):
             "duracion": 30,
             "buffer_previo": 10,
             "buffer_posterior": 5,
+            "search_mode": "general",
         },
     )
 
@@ -77,7 +78,7 @@ def test_api_filter_by_employee(monkeypatch):
         ],
     )
 
-    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5})
+    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "search_mode": "employee"})
     monkeypatch.setattr(api, "get_ocupaciones", lambda e, fi, ff: [])
 
     payload = {
@@ -104,7 +105,7 @@ def test_api_heavy_occupancy_returns_empty(monkeypatch):
             {"empleado_id": "E2", "horario_trabajo": [600, 1080]},
         ],
     )
-    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5})
+    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "search_mode": "general"})
 
     def occ_full(empleados, fi, ff):
         # Ocupa toda la ventana solicitada para todos los empleados
@@ -133,7 +134,7 @@ def test_api_cross_midnight_slots(monkeypatch):
             {"empleado_id": "N1", "horario_trabajo": [0, 120]},
         ],
     )
-    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5})
+    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "search_mode": "general"})
     monkeypatch.setattr(api, "get_ocupaciones", lambda e, fi, ff: [])
 
     payload = {
@@ -153,7 +154,7 @@ def test_api_equipment_id_passthrough(monkeypatch):
     from telensor_engine import main as api
 
     monkeypatch.setattr(api, "get_horarios_empleados", lambda fecha, servicio_id=None, equipo_id=None: [{"empleado_id": "E1", "horario_trabajo": [540, 1020]}])
-    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5})
+    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "search_mode": "equipment"})
     monkeypatch.setattr(api, "get_ocupaciones", lambda e, fi, ff: [])
 
     payload = {
@@ -175,6 +176,11 @@ def test_api_strict_filter_returns_empty_when_no_qualified_employees():
     # - E1: servicios [SVC1,SVC2], equipos [EQ1]
     # - E2: servicios [SVC2], equipos [EQ1,EQ2]
     # Para servicio SVC1 con equipo EQ2, ningún empleado cumple ambos filtros.
+    # Forzamos el modo 'equipment' para validar el filtro por equipo sin empleado.
+    monkeypatch = pytest.MonkeyPatch()
+    from telensor_engine import main as api
+    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "search_mode": "equipment"})
+
     payload = {
         "servicio_id": "SVC1",
         "equipo_id": "EQ2",
@@ -194,3 +200,30 @@ def test_api_invalid_range_returns_400():
     }
     resp = client.post("/api/v1/disponibilidad", json=payload)
     assert resp.status_code == 400
+
+
+def test_api_equipo_ids_is_forbidden_422():
+    """Enviar campo `equipo_ids` debe resultar en 422 (campo prohibido)."""
+    payload = {
+        "servicio_id": "SVC2",
+        "empleado_id": "E2",
+        "equipo_ids": ["EQ1", "EQ2"],
+        "fecha_inicio_utc": "2025-11-06T08:00:00Z",
+        "fecha_fin_utc": "2025-11-06T12:00:00Z",
+    }
+    resp = client.post("/api/v1/disponibilidad", json=payload)
+    assert resp.status_code == 422
+
+
+def test_api_equipo_id_y_equipo_ids_forbidden_422():
+    """Enviar ambos 'equipo_id' y 'equipo_ids' también resulta en 422 por campo extra."""
+    payload = {
+        "servicio_id": "SVC2",
+        "empleado_id": "E2",
+        "equipo_id": "EQ1",
+        "equipo_ids": ["EQ1", "EQ2"],
+        "fecha_inicio_utc": "2025-11-06T08:00:00Z",
+        "fecha_fin_utc": "2025-11-06T10:00:00Z",
+    }
+    resp = client.post("/api/v1/disponibilidad", json=payload)
+    assert resp.status_code == 422

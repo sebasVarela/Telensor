@@ -147,6 +147,20 @@ Ejemplo rápido:
 - **Gerente (Adaptador)**: `telensor_engine.api.adapter.gestionar_busqueda_disponibilidad` realiza la carga del escenario, aplica políticas (`ServiceWindowPolicy`), agrega bloqueos, calcula ventanas efectivas y empaqueta los slots usando `encontrar_slots`.  
 - **Beneficio**: Reutilización de la lógica en Fase 2 (Cascada de Resolución de Conflictos) sin duplicar código y con mejor testabilidad.
 \
+### **Intersección de Capacidades (Selección Inteligente de Equipo)**
+
+- **Objetivo**: Asignar automáticamente el equipo correcto cuando se solicita disponibilidad para un `empleado_id` sin especificar `equipo_id`.
+- **Definición**: Cada Servicio puede declarar `equipos_compatibles` y cada Empleado define `equipos_asignados`.  
+- **Algoritmo**:
+  - Modo empleado: se cruza respetando el orden declarado por el servicio y se selecciona el primer equipo coincidente.
+  - **Modo general (Pool)**: se prueban TODOS los equipos en la intersección servicio∩empleado para cada candidato de slot; se agregan los resultados y se deduplican por horario `(inicio, fin)` ignorando el equipo. Si más de un equipo habilita el mismo horario, se selecciona uno de forma determinista (manteniendo balanceo por carga de empleado).
+  - Implementación:
+    - Utilidad: `telensor_engine.api.adapter.seleccionar_equipo_por_interseccion(servicio, empleado)`.
+    - Utilidad (intersección múltiple): `telensor_engine.api.adapter.obtener_equipos_compatibles_para_empleado(servicio, empleado)`.
+    - Camino empleado sin equipo: el Gerente autoasigna el equipo y calcula disponibilidad conjunta Empleado ∩ Equipo.
+    - Estricto: si el servicio declara `equipos_compatibles` y no existe intersección con los `equipos_asignados` del empleado, ese empleado no genera slots (no hay fallback a "solo servicio").
+    - **Efecto en Respuesta**: `equipo_id_asignado` se completa con el equipo seleccionado en cada slot.
+
 ### **Fuente de Excepciones**
 
 - Las excepciones deben definirse en `docs/test_scenarios.json` (para pruebas) o en la fuente de datos externa (p. ej., Directus) para producción.
@@ -204,3 +218,51 @@ Ejemplo rápido:
 - **Gerente de Disponibilidad**: `telensor_engine/api/adapter.py` en `gestionar_busqueda_disponibilidad` pasa explícitamente `servicio_id` y `equipo_id` a `get_horarios_empleados`, asegurando que la disponibilidad solo se calcule para empleados válidos.
 - **Efecto en la API**: al solicitar disponibilidad con `servicio_id` y opcionalmente `equipo_id`, los slots devueltos siempre asignarán empleados calificados y equipos permitidos, reforzando la integridad operativa.
  - **Escenarios con Asignaciones**: `docs/test_scenarios.json` puede definir por empleado `servicios_asignados` y `equipos_asignados`. Cuando estas claves existen en el escenario cargado, el Gerente aplica filtrado estricto sobre los empleados del escenario para respetar dichas asignaciones. Si dichas claves no están presentes, se mantiene compatibilidad sin filtrado adicional.
+
+## **12. Estado: `equipo_ids` deprecado**
+
+
+## **13. Política de Búsqueda (search_mode) — Estricta**
+
+- Todo servicio debe operar bajo un `search_mode` explícito. Si no se define, el sistema aplica el valor por defecto `general` de forma estricta.
+- Modos admitidos:
+ - `employee`: la solicitud debe incluir `empleado_id` y no debe incluir `equipo_id` (estricto). Si el servicio requiere equipo (`equipos_compatibles`), se autoasigna por intersección; si no hay intersección válida, se responde 400.
+  - `equipment`: la solicitud debe incluir `equipo_id` y no debe incluir `empleado_id` (estricto).
+    - Si el servicio declara `equipos_compatibles`, el `equipo_id` solicitado debe pertenecer a esa lista; de lo contrario, la API responde `400 Bad Request` con mensaje "Equipo no compatible para el servicio".
+  - `general`: no se permite enviar `empleado_id` ni `equipo_id`. El sistema opera en modo Pool y, si el servicio requiere equipo (`equipos_compatibles`), autoasigna por intersección con `equipos_asignados` del empleado; empleados sin intersección no generan slots.
+- Implementación: `telensor_engine.api.adapter.gestionar_busqueda_disponibilidad` aplica esta validación y mapea errores a HTTP 400 en `telensor_engine.main.buscar_disponibilidad`.
+- Escenarios: `docs/test_scenarios.json` incluye `search_mode` para todos los servicios relevantes (p. ej., `night_shift` usa `employee`; los demás usan `general`).
+
+## **14. Balanceo de Carga — Menos Cargado**
+
+- Objetivo: cuando hay múltiples empleados libres para el mismo horario, seleccionar el empleado con **menos minutos ocupados** ese día.
+- Alcance:
+  - Modo `equipment` (búsqueda por equipo): agrupa resultados por `(inicio_slot, fin_slot, equipo_id)` y elige el candidato con menor carga diaria.
+  - Modo `general` (Pool): agrupa por `(inicio_slot, fin_slot)` ignorando el equipo y elige un único candidato por horario. Si el servicio requiere equipo, la autoasignación respeta la intersección estricta por empleado, pero la competencia sigue siendo "slot por slot".
+- Cómputo de carga: utilidad `_sumar_minutos_interseccion(intervalos, ventana_dia)` suma los minutos ocupados del empleado dentro de la ventana `[offset_dia, offset_dia+1440)`, contemplando cruce de medianoche.
+- Implementación: en el Gerente, tras empaquetar slots por empleado, se realiza una selección por grupo para retornar un único slot óptimo por horario.
+- Escenario de prueba: `load_balance_demo` define dos empleados (`E_A`, `E_B`) con cargas distintas (60 vs 15 minutos) para validar que el sistema selecciona `E_B` en horarios compartidos.
+
+## **15. Logging y Métricas**
+
+- Logging: el Gerente emite trazas al seleccionar equipos por intersección y al aplicar la política de ventana. Se recomienda añadir métricas de validación (rechazos por `search_mode`) para auditoría.
+- Seguridad: entradas HTTP estrictamente validadas; no se exponen detalles internos en errores.
+- Rendimiento: el agrupamiento y selección por carga se realiza en memoria y es lineal respecto al número de slots generados.
+
+- El campo `equipo_ids` ya no está soportado en el request de disponibilidad.
+- En su lugar, se admite `equipo_id` único o consulta por servicio sin equipo.
+- Validación: enviar `equipo_ids` produce `422 Unprocessable Entity` por política estricta `extra = "forbid"` en el modelo Pydantic.
+- Logging y métricas: se mantienen para el camino de equipo único y servicio-only.
+
+## **13. Validación de Política de Búsqueda (search_mode)**
+
+- **Propósito**: Asegurar que la API rechace solicitudes que contradigan la naturaleza operativa del servicio.
+- **Definición**: Cada Servicio puede declarar `search_mode` con valores:
+  - `employee`: el cliente debe elegir un `empleado_id` y no puede enviar `equipo_id`.
+  - `equipment`: el cliente debe elegir un `equipo_id` y no puede enviar `empleado_id`.
+  - `general`: el cliente no debe elegir recursos específicos; la API opera en modo pool y agrega slots de todos los empleados calificados.
+- **Validación (Gerente)**: `gestionar_busqueda_disponibilidad` valida el `search_mode` si está presente en la definición del servicio y en caso de incoherencia levanta `ValueError` con mensaje claro. El Director (`main.buscar_disponibilidad`) lo mapea a `HTTP 400`.
+- **Ejecución de Pool (general)**:
+  - Si el servicio declara `equipos_compatibles`, la API autoasigna equipo por intersección por empleado y omite empleados sin match.
+  - Si el servicio no declara `equipos_compatibles`, la API devuelve slots con `equipo_id_asignado = null`.
+- **Compatibilidad**: Para no romper casos existentes, la validación sólo aplica si el servicio define explícitamente `search_mode`. El valor por defecto en escenarios sin esa propiedad es comportamiento previo (sin validación de política).

@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 import pendulum
@@ -38,6 +38,14 @@ class ServiceWindowPolicy(str, Enum):
 
 
 class SolicitudDisponibilidad(BaseModel):
+    """Modelo de request para búsqueda de disponibilidad.
+
+    Cambios:
+    - Se elimina el soporte para múltiples equipos en el request. Solo se permite `equipo_id` único.
+    - Se mantiene la semántica por servicio (sin `empleado_id`) y por empleado (con `empleado_id`).
+    - Validación estricta de campos extra para evitar envíos de `equipo_ids` u otros.
+    """
+
     servicio_id: str
     empleado_id: Optional[str] = None
     equipo_id: Optional[str] = None
@@ -45,6 +53,9 @@ class SolicitudDisponibilidad(BaseModel):
     fecha_fin_utc: datetime
     scenario_id: Optional[str] = None
     service_window_policy: ServiceWindowPolicy = ServiceWindowPolicy.start_only
+
+    # Pydantic v2: usar ConfigDict para eliminar advertencia de clase Config
+    model_config = ConfigDict(extra="forbid")
 
 
 class SlotDisponible(BaseModel):
@@ -77,6 +88,9 @@ class SolicitudReserva(BaseModel):
     scenario_id: Optional[str] = None
     service_window_policy: ServiceWindowPolicy = ServiceWindowPolicy.start_only
 
+    # Validación estricta de campos extra en creación de reservas
+    model_config = ConfigDict(extra="forbid")
+
 
 class ReservaCreada(BaseModel):
     """Salida estándar tras creación exitosa de una reserva."""
@@ -99,13 +113,19 @@ async def buscar_disponibilidad(solicitud: SolicitudDisponibilidad) -> Respuesta
     if solicitud.fecha_fin_utc <= solicitud.fecha_inicio_utc:
         raise HTTPException(status_code=400, detail="Rango de fechas inválido")
 
+    # No hay validación de múltiples equipos: el request solo acepta `equipo_id` único.
+
     # Delegación al Gerente: toda la lógica pesada vive en el adaptador.
-    resultados_dict = gestionar_busqueda_disponibilidad(
-        solicitud,
-        get_servicio_fn=get_servicio,
-        get_horarios_empleados_fn=get_horarios_empleados,
-        get_ocupaciones_fn=get_ocupaciones,
-    )
+    try:
+        resultados_dict = gestionar_busqueda_disponibilidad(
+            solicitud,
+            get_servicio_fn=get_servicio,
+            get_horarios_empleados_fn=get_horarios_empleados,
+            get_ocupaciones_fn=get_ocupaciones,
+        )
+    except ValueError as e:
+        # Mapear errores de validación del Gerente a HTTP 400 para el cliente
+        raise HTTPException(status_code=400, detail=str(e))
     resultados_gerente: List[SlotDisponible] = [
         SlotDisponible(
             inicio_slot=item["inicio_slot"],

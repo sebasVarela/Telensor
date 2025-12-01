@@ -2,28 +2,32 @@
   "scenarios": {
     "baseline": {
       "servicios": {
-        "SVC1": { "duracion": 80, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [420, 720] },
-        "SVC2": { "duracion": 50, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [480, 720] }
+        "SVC1": { "duracion": 80, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [420, 720], "equipos_compatibles": ["EQ1"], "search_mode": "employee" },
+        "SVC2": { "duracion": 50, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [420, 720], "equipos_compatibles": ["EQ1", "EQ2"], "search_mode": "general" }
       },
       "empleados": [
-        { "empleado_id": "E1", "horario_trabajo": [390, 570], "servicios_asignados": ["SVC1", "SVC2"], "equipos_asignados": ["EQ1", "EQ2"] },
-        { "empleado_id": "E2", "horario_trabajo": [570, 750], "servicios_asignados": ["SVC1"], "equipos_asignados": ["EQ2"] }
+        { "empleado_id": "E1", "horario_trabajo": [390, 780], "servicios_asignados": ["SVC1", "SVC2"], "equipos_asignados": ["EQ1", "EQ2"] },
+        { "empleado_id": "E2", "horario_trabajo": [390, 780], "servicios_asignados": ["SVC1", "SVC2"], "equipos_asignados": ["EQ1", "EQ2"] }
       ],
       "equipos": [
-        { "equipo_id": "EQ1", "horario_operativo": [390, 570] },
-        { "equipo_id": "EQ2", "horario_operativo": [570, 750] }
+        { "equipo_id": "EQ1", "horario_operativo": [390, 780] },
+        { "equipo_id": "EQ2", "horario_operativo": [390, 780] }
       ],
       "horario_atencion_negocio": [390, 720],
       "ocupaciones": [
-        { "empleado_id": "E2", "inicio": "2025-11-06T09:30:00Z", "fin": "2025-11-06T10:30:00Z" }
+        { "empleado_id": "E1", "inicio": "2025-11-06T06:55:00Z", "fin": "2025-11-06T07:55:00Z" },
+        { "empleado_id": "E1", "inicio": "2025-11-06T07:55:00Z", "fin": "2025-11-06T08:55:00Z" },
+        { "empleado_id": "E2", "inicio": "2025-11-06T09:55:00Z", "fin": "2025-11-06T10:55:00Z" }
       ],
       "ocupaciones_equipo": [
-        { "equipo_id": "EQ2", "inicio": "2025-11-06T09:30:00Z", "fin": "2025-11-06T11:00:00Z" }
+        { "equipo_id": "EQ1", "inicio": "2025-11-06T06:55:00Z", "fin": "2025-11-06T07:55:00Z" },
+        { "equipo_id": "EQ1", "inicio": "2025-11-06T07:55:00Z", "fin": "2025-11-06T08:55:00Z" },
+        { "equipo_id": "EQ2", "inicio": "2025-11-06T09:55:00Z", "fin": "2025-11-06T10:55:00Z" }
       ]
     },
     "overlap_heavy": {
       "servicios": {
-        "SVC1": { "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5 }
+        "SVC1": { "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "equipos_compatibles": ["EQ1"], "search_mode": "general" }
       },
       "empleados": [
         { "empleado_id": "E1", "horario_trabajo": [540, 1020], "servicios_asignados": ["SVC1"], "equipos_asignados": ["EQ1"] },
@@ -49,7 +53,9 @@
           "duracion": 80,
           "buffer_previo": 5,
           "buffer_posterior": 5,
-          "horario_atencion": [1320, 1590]
+          "horario_atencion": [1320, 1590],
+          "equipos_compatibles": ["EQ1"],
+          "search_mode": "employee"
         }
       },
       "empleados": [
@@ -74,23 +80,21 @@
           "reason": "Revisión"
         }
       ]
-    }
-    ,
+    },
     "pre_edge": {
       "servicios": {
-        "SVC1": { "duracion": 80, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [420, 720] }
+        "SVC1": { "duracion": 80, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [420, 720], "equipos_compatibles": ["EQ1"], "search_mode": "employee" }
       },
       "empleados": [
-        { "empleado_id": "E_PRE", "horario_trabajo": [418, 750], "servicios_asignados": ["SVC1"], "equipos_asignados": [] }
+        { "empleado_id": "E_PRE", "horario_trabajo": [418, 750], "servicios_asignados": ["SVC1"], "equipos_asignados": ["EQ1"] }
       ],
       "equipos": [],
       "horario_atencion_negocio": [420, 720],
       "ocupaciones": []
-    }
-    ,
+    },
     "svc_window_edge": {
       "servicios": {
-        "SVC_EDGE": { "duracion": 80, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [600, 660] }
+        "SVC_EDGE": { "duracion": 80, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [600, 660], "equipos_compatibles": ["EQ_EDGE"], "search_mode": "employee" }
       },
       "empleados": [
         { "empleado_id": "E_EDGE", "horario_trabajo": [570, 750], "servicios_asignados": ["SVC_EDGE"], "equipos_asignados": ["EQ_EDGE"] }
@@ -101,11 +105,10 @@
       "horario_atencion_negocio": [540, 720],
       "ocupaciones": [],
       "ocupaciones_equipo": []
-    }
-    ,
+    },
     "business_exception_full": {
       "servicios": {
-        "SVC1": { "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "horario_atencion": [600, 840] }
+        "SVC1": { "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "horario_atencion": [600, 840], "search_mode": "general" }
       },
       "empleados": [
         { "empleado_id": "E1", "horario_trabajo": [600, 840], "servicios_asignados": ["SVC1"], "equipos_asignados": [] }
@@ -121,6 +124,62 @@
           "reason": "Feriado"
         }
       ]
+    },
+    "policy_demo": {
+      "servicios": {
+        "SVC_EMP": { "duracion": 30, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [540, 660], "search_mode": "employee" },
+        "SVC_EQ": { "duracion": 30, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [540, 660], "equipos_compatibles": ["EQX"], "search_mode": "equipment" },
+        "SVC_POOL": { "duracion": 30, "buffer_previo": 5, "buffer_posterior": 5, "horario_atencion": [540, 660], "equipos_compatibles": ["EQP1"], "search_mode": "general" }
+      },
+      "empleados": [
+        { "empleado_id": "E_EMP", "horario_trabajo": [540, 660], "servicios_asignados": ["SVC_EMP"], "equipos_asignados": [] },
+        { "empleado_id": "E_EQ", "horario_trabajo": [540, 660], "servicios_asignados": ["SVC_EQ"], "equipos_asignados": ["EQX"] },
+        { "empleado_id": "E_POOL1", "horario_trabajo": [540, 660], "servicios_asignados": ["SVC_POOL"], "equipos_asignados": ["EQP1"] },
+        { "empleado_id": "E_POOL2", "horario_trabajo": [540, 660], "servicios_asignados": ["SVC_POOL"], "equipos_asignados": ["EQP2"] }
+      ],
+      "equipos": [
+        { "equipo_id": "EQX", "horario_operativo": [540, 660] },
+        { "equipo_id": "EQP1", "horario_operativo": [540, 660] },
+        { "equipo_id": "EQP2", "horario_operativo": [540, 660] }
+      ],
+      "horario_atencion_negocio": [540, 660],
+      "ocupaciones": [],
+      "ocupaciones_equipo": []
+    },
+    "load_balance_demo": {
+      "servicios": {
+        "SVC_LBG": { "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "horario_atencion": [540, 660], "search_mode": "general" },
+        "SVC_LBEQ": { "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "horario_atencion": [540, 660], "equipos_compatibles": ["EQ_LB"], "search_mode": "equipment" }
+      },
+      "empleados": [
+        { "empleado_id": "E_A", "horario_trabajo": [540, 660], "servicios_asignados": ["SVC_LBG", "SVC_LBEQ"], "equipos_asignados": ["EQ_LB"] },
+        { "empleado_id": "E_B", "horario_trabajo": [540, 660], "servicios_asignados": ["SVC_LBG", "SVC_LBEQ"], "equipos_asignados": ["EQ_LB"] }
+      ],
+      "equipos": [
+        { "equipo_id": "EQ_LB", "horario_operativo": [540, 660] }
+      ],
+      "horario_atencion_negocio": [540, 660],
+      "ocupaciones": [
+        { "empleado_id": "E_A", "inicio": "2025-11-06T09:00:00Z", "fin": "2025-11-06T10:00:00Z" },
+        { "empleado_id": "E_B", "inicio": "2025-11-06T09:30:00Z", "fin": "2025-11-06T09:45:00Z" }
+      ],
+      "ocupaciones_equipo": []
+    }
+    ,
+    "tie_break_demo": {
+      "servicios": {
+        "SVC_TB": { "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "horario_atencion": [540, 660], "search_mode": "general" }
+      },
+      "empleados": [
+        { "empleado_id": "E_T1", "horario_trabajo": [540, 660], "servicios_asignados": ["SVC_TB"], "equipos_asignados": ["EQ_TB"] },
+        { "empleado_id": "E_T2", "horario_trabajo": [540, 660], "servicios_asignados": ["SVC_TB"], "equipos_asignados": ["EQ_TB"] }
+      ],
+      "equipos": [
+        { "equipo_id": "EQ_TB", "horario_operativo": [540, 660] }
+      ],
+      "horario_atencion_negocio": [540, 660],
+      "ocupaciones": [],
+      "ocupaciones_equipo": []
     }
   }
 }
