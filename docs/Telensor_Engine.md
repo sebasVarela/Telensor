@@ -96,10 +96,17 @@ El sistema debe intentar resolver el conflicto automáticamente siguiendo esta j
   * *El sistema busca*: \[\*\*E2\*\*, EQ1, Slot\_Absoluto\]  
   * (Es decir: Otro Empleado libre \+ Mismo Equipo \+ Mismo Slot)  
 * **Caso 2: Falla el Equipo (EQ1)**  
-  * *Cita original*: \[E1, EQ1, Slot\_Absoluto\]  
-  * *El sistema busca*: \[E1, \*\*EQ2\*\*, Slot\_Absoluto\]  
-  * (Es decir: Mismo Empleado \+ Otro Equipo libre \+ Mismo Slot)  
+  * *Cita original*: \[E1, EQ1, Slot_Absoluto\]  
+  * *El sistema busca*: \[E1, **EQ2**, Slot_Absoluto\]  
+  * (Es decir: Mismo Empleado + Otro Equipo libre + Mismo Slot)  
 * **Resultado**: Si se encuentra un match, la cita se actualiza. Esta acción puede ser automática, requiriendo solo una notificación al cliente (ej. "Ahora te atenderá Ana en lugar de Juan").
+
+Implementación vigente (Gerente de Bloqueos):
+
+- Para bloqueos con `scope="business"`, las reservas afectadas se marcan directamente como `PENDIENTE_REAGENDA` (no hay reasignación automática al ser un cierre global).
+- Para otros alcances (`employee`, `equipment`, `service`):
+  - Se intenta primero una reasignación en el **mismo slot absoluto**, excluyendo el empleado bloqueado cuando aplique. Si el servicio está en modo `equipment`, se preserva el equipo original al confirmar disponibilidad.
+  - Si no hay candidato en el mismo slot, se aplica un **fallback conservador**: reasignación directa a otro empleado elegible del escenario que no esté bloqueado ni en conflicto temporal. Si aún así no es posible, la reserva se marca como `PENDIENTE_REAGENDA`.
 
 **B. Reagendar (Prioridad 2: Nuevo Horario)**
 
@@ -151,15 +158,29 @@ Ejemplo rápido:
 
 - **Objetivo**: Asignar automáticamente el equipo correcto cuando se solicita disponibilidad para un `empleado_id` sin especificar `equipo_id`.
 - **Definición**: Cada Servicio puede declarar `equipos_compatibles` y cada Empleado define `equipos_asignados`.  
-- **Algoritmo**:
-  - Modo empleado: se cruza respetando el orden declarado por el servicio y se selecciona el primer equipo coincidente.
-  - **Modo general (Pool)**: se prueban TODOS los equipos en la intersección servicio∩empleado para cada candidato de slot; se agregan los resultados y se deduplican por horario `(inicio, fin)` ignorando el equipo. Si más de un equipo habilita el mismo horario, se selecciona uno de forma determinista (manteniendo balanceo por carga de empleado).
+- **Algoritmo actualizado**:
+  - Modo empleado: se prueban TODOS los equipos en la intersección `equipos_compatibles ∩ equipos_asignados` del empleado y se agregan los slots resultantes. Esto evita perder horarios válidos por el orden de declaración de equipos.
+  - Deduplicación en modo empleado: si varios equipos habilitan el mismo horario `(inicio, fin)` para el empleado, se selecciona un único candidato por slot. Criterio: preferir el equipo según el orden declarado en `equipos_compatibles` del servicio; desempate determinista por `equipo_id` lexicográfico. 
+  - **Pool general (sin filtros)**: se prueban TODOS los equipos en la intersección servicio∩empleado para cada candidato de slot; se agregan los resultados y se deduplican por horario `(inicio, fin)` ignorando el equipo. Si más de un equipo habilita el mismo horario, se selecciona uno de forma determinista (manteniendo balanceo por carga de empleado).
   - Implementación:
-    - Utilidad: `telensor_engine.api.adapter.seleccionar_equipo_por_interseccion(servicio, empleado)`.
     - Utilidad (intersección múltiple): `telensor_engine.api.adapter.obtener_equipos_compatibles_para_empleado(servicio, empleado)`.
-    - Camino empleado sin equipo: el Gerente autoasigna el equipo y calcula disponibilidad conjunta Empleado ∩ Equipo.
+    - Camino empleado sin equipo: el Gerente calcula disponibilidad conjunta Empleado ∩ Equipo para todos los equipos compatibles del empleado.
     - Estricto: si el servicio declara `equipos_compatibles` y no existe intersección con los `equipos_asignados` del empleado, ese empleado no genera slots (no hay fallback a "solo servicio").
-    - **Efecto en Respuesta**: `equipo_id_asignado` se completa con el equipo seleccionado en cada slot.
+    - **Efecto en Respuesta**: `equipo_id_asignado` se completa con el equipo correspondiente en cada slot.
+
+### **Política de Selección de Equipo (`equipo_selection_policy`)**
+
+- **Objetivo**: parametrizar cómo se elige el equipo cuando un empleado tiene múltiples opciones compatibles para un servicio.
+- **Ubicación**: propiedad opcional del Servicio. Si no se indica, se usa `service_order` por defecto. También está disponible en `mock_db.get_servicio` con valor por defecto.
+- **Valores admitidos**:
+  - `service_order` (por defecto): prioriza el orden declarado en `equipos_compatibles` del servicio. En caso de empate, desempata lexicográficamente por `equipo_id`.
+  - `least_loaded`: selecciona el equipo con menos minutos ocupados en el **día completo** relativo a la fecha base (0–1440 sobre el eje continuo) usando la agregación `build_total_blockings` y el cálculo `_sumar_minutos_interseccion`. En caso de empate, desempata lexicográficamente por `equipo_id`.
+- **Alcance de aplicación**:
+  - Modo empleado (sin `equipo_id`): se deduplica por `(inicio, fin)` ignorando equipo y se aplica la política para elegir un único `equipo_id_asignado` por slot.
+  - Pool general (sin filtros): tras elegir el empleado por menor carga en la ventana solicitada, si ese empleado tiene múltiples equipos generando el mismo slot, se aplica la política para elegir el `equipo_id_asignado`.
+- **Implementación**:
+  - Helper: `telensor_engine.api.adapter.seleccionar_equipo_por_politica(candidatos_eq, servicio, servicio_id, empleados_ids, base_midnight, inicio_dt, fin_dt, ventana_base, ...)`.
+  - Deduplicación: la agrupación por `(inicio, fin)` en los modos que ignoran equipo garantiza que el sistema devuelva un único candidato por horario, con equipo seleccionado según la política.
 
 ### **Fuente de Excepciones**
 
@@ -177,6 +198,11 @@ Ejemplo rápido:
 - **Doble Chequeo Anti-colisión**:  
   1) Chequeo inmediato de conflicto en memoria (`mock_state.has_conflict`). Si existe, se devuelve 409.  
   2) Confirmación de validez del slot con el Gerente de disponibilidad (misma política de ventana, escenario y buffers). Si el slot deja de ser válido, se devuelve 400.
+
+- **Validación por Filtros**:  
+  - Si la solicitud incluye `empleado_id`, además de coincidir el intervalo temporal, el `empleado_id_asignado` del slot debe coincidir.  
+  - Si la solicitud incluye `equipo_id`, además del intervalo, el `equipo_id_asignado` del slot debe coincidir.  
+  - Si la solicitud no incluye recursos (`empleado_id` ni `equipo_id`), la confirmación del slot exige solo coincidencia temporal estricta; el sistema puede elegir automáticamente otro empleado y/o equipo elegible.
 
 - **Bloqueos por Reservas**:  
   `build_total_blockings` agrega las reservas existentes en memoria como bloqueos del empleado y del equipo. La disponibilidad se actualiza inmediatamente tras una creación.
@@ -221,31 +247,54 @@ Ejemplo rápido:
 
 ## **12. Estado: `equipo_ids` deprecado**
 
+Anteriormente algunos flujos operaban con una lista genérica `equipo_ids`. Ese campo se considera **deprecado**. El sistema vigente aplica un modelado más explícito:
 
-## **13. Política de Búsqueda (search_mode) — Estricta**
+- En Servicios: `equipos_compatibles` define los equipos permitidos para ese servicio.
+- En Empleados: `equipos_asignados` define los equipos que el empleado puede operar.
+- En la búsqueda: el Gerente intersecta `equipos_compatibles ∩ equipos_asignados` por empleado. En modo `general`, se deduplican los slots por horario ignorando el equipo y se autoasigna de forma determinista uno válido.
 
-- Todo servicio debe operar bajo un `search_mode` explícito. Si no se define, el sistema aplica el valor por defecto `general` de forma estricta.
-- Modos admitidos:
- - `employee`: la solicitud debe incluir `empleado_id` y no debe incluir `equipo_id` (estricto). Si el servicio requiere equipo (`equipos_compatibles`), se autoasigna por intersección; si no hay intersección válida, se responde 400.
-  - `equipment`: la solicitud debe incluir `equipo_id` y no debe incluir `empleado_id` (estricto).
-    - Si el servicio declara `equipos_compatibles`, el `equipo_id` solicitado debe pertenecer a esa lista; de lo contrario, la API responde `400 Bad Request` con mensaje "Equipo no compatible para el servicio".
-  - `general`: no se permite enviar `empleado_id` ni `equipo_id`. El sistema opera en modo Pool y, si el servicio requiere equipo (`equipos_compatibles`), autoasigna por intersección con `equipos_asignados` del empleado; empleados sin intersección no generan slots.
-- Implementación: `telensor_engine.api.adapter.gestionar_busqueda_disponibilidad` aplica esta validación y mapea errores a HTTP 400 en `telensor_engine.main.buscar_disponibilidad`.
-- Escenarios: `docs/test_scenarios.json` incluye `search_mode` para todos los servicios relevantes (p. ej., `night_shift` usa `employee`; los demás usan `general`).
+Efecto: se elimina ambigüedad, se refuerza validez operativa y se mejora la trazabilidad de asignaciones.
 
-## **14. Balanceo de Carga — Menos Cargado**
 
-- Objetivo: cuando hay múltiples empleados libres para el mismo horario, seleccionar el empleado con **menos minutos ocupados** ese día.
+## **13. Derivación por Filtros (modo unificado)**
+
+- Regla de operación:
+  - Si la solicitud incluye `equipo_id`, se siguen reglas de camino por equipo. Se valida compatibilidad del equipo contra `equipos_compatibles` del servicio.
+  - Si la solicitud incluye `empleado_id` sin `equipo_id`, se siguen reglas de camino por empleado. Si el servicio requiere equipo (`equipos_compatibles`), se autoasigna por intersección estricta con `equipos_asignados` del empleado; empleados sin intersección no generan slots.
+  - Si la solicitud no incluye recursos (`empleado_id` ni `equipo_id`), se opera en **pool general**. Si el servicio requiere equipo, se autoasigna por intersección por empleado, pero la deduplicación y selección se hace por horario `(inicio, fin)`, ignorando el equipo.
+- Implementación: `telensor_engine.api.adapter.gestionar_busqueda_disponibilidad` aplica estas reglas y mapea errores a HTTP 400 en `telensor_engine.main.buscar_disponibilidad`.
+- Escenarios: `docs/test_scenarios.json` ya no incluye `search_mode`; los filtros determinan el comportamiento.
+
+## **14. Balanceo de Carga — Menos Cargado (ventana base)**
+
+- Objetivo: cuando hay múltiples empleados libres para el mismo horario, seleccionar el empleado con **menos minutos ocupados dentro de la ventana base solicitada**.
 - Alcance:
-  - Modo `equipment` (búsqueda por equipo): agrupa resultados por `(inicio_slot, fin_slot, equipo_id)` y elige el candidato con menor carga diaria.
-  - Modo `general` (Pool): agrupa por `(inicio_slot, fin_slot)` ignorando el equipo y elige un único candidato por horario. Si el servicio requiere equipo, la autoasignación respeta la intersección estricta por empleado, pero la competencia sigue siendo "slot por slot".
-- Cómputo de carga: utilidad `_sumar_minutos_interseccion(intervalos, ventana_dia)` suma los minutos ocupados del empleado dentro de la ventana `[offset_dia, offset_dia+1440)`, contemplando cruce de medianoche.
+  - Búsqueda por equipo (`equipo_id` presente): agrupa resultados por `(inicio_slot, fin_slot, equipo_id)` y elige el candidato con menor carga en `[inicio_min, fin_min]` (ventana efectiva de búsqueda).
+  - Pool general (sin filtros): agrupa por `(inicio_slot, fin_slot)` ignorando el equipo y elige un único candidato por horario, midiendo la carga dentro de la ventana base. Si el servicio requiere equipo, la autoasignación respeta la intersección estricta por empleado, pero la competencia sigue siendo "slot por slot".
+  - Nota: este criterio evita que los primeros slots de la lista provoquen solapes consecutivos sobre el mismo empleado cuando existen alternativas válidas.
+
+## **15. Bloqueos Operativos (Endpoint)**
+
+- **Endpoint**: `POST /api/v1/bloqueos`  
+  - Director: `telensor_engine.main.crear_bloqueo`  
+  - Gerente: `telensor_engine.api.adapter.gestionar_creacion_bloqueo`  
+  - Entrada: `SolicitudBloqueo` (inicio_utc, fin_utc, motivo, scope, empleado_ids?, equipo_ids?, servicio_ids?).  
+  - Salida: `RespuestaBloqueo` con `bloqueo_id` y lista de `ProcesadaReserva` indicando `estado` y la reasignación cuando aplique.
+
+- **Alcances soportados** (`BloqueoScope`): `business`, `employee`, `equipment`, `service`.
+
+- **Cascada aplicada**:  
+  - `business`: marca `PENDIENTE_REAGENDA` en reservas afectadas (cierre global).  
+  - `employee`/`equipment`/`service`: intenta reasignación en mismo slot excluyendo recursos bloqueados; preserva equipo cuando la reserva lo tenía y el equipo no está bloqueado; si falla, fallback conservador a otro empleado elegible; si no hay opción, `PENDIENTE_REAGENDA`.
+
+- **Integración con disponibilidad**: la confirmación de candidatos usa `gestionar_busqueda_disponibilidad`, respetando `service_window_policy` y agregando bloqueos totales (escenario + memoria).
+- Cómputo de carga: utilidad `_sumar_minutos_interseccion(intervalos, ventana_base)` suma los minutos ocupados del empleado dentro de la ventana de búsqueda `[inicio_min, fin_min]`, contemplando cruce de medianoche (las colecciones de intervalos se expresan en eje continuo y la ventana base puede abarcar más de un día). 
 - Implementación: en el Gerente, tras empaquetar slots por empleado, se realiza una selección por grupo para retornar un único slot óptimo por horario.
 - Escenario de prueba: `load_balance_demo` define dos empleados (`E_A`, `E_B`) con cargas distintas (60 vs 15 minutos) para validar que el sistema selecciona `E_B` en horarios compartidos.
 
 ## **15. Logging y Métricas**
 
-- Logging: el Gerente emite trazas al seleccionar equipos por intersección y al aplicar la política de ventana. Se recomienda añadir métricas de validación (rechazos por `search_mode`) para auditoría.
+- Logging: el Gerente emite trazas al seleccionar equipos por intersección y al aplicar la política de ventana. Se recomienda añadir métricas de validación (rechazos por filtros incompatibles y compatibilidad de equipo) para auditoría.
 - Seguridad: entradas HTTP estrictamente validadas; no se exponen detalles internos en errores.
 - Rendimiento: el agrupamiento y selección por carga se realiza en memoria y es lineal respecto al número de slots generados.
 
@@ -254,15 +303,10 @@ Ejemplo rápido:
 - Validación: enviar `equipo_ids` produce `422 Unprocessable Entity` por política estricta `extra = "forbid"` en el modelo Pydantic.
 - Logging y métricas: se mantienen para el camino de equipo único y servicio-only.
 
-## **13. Validación de Política de Búsqueda (search_mode)**
+## **16. Eliminación de `search_mode` (deprecado)
 
-- **Propósito**: Asegurar que la API rechace solicitudes que contradigan la naturaleza operativa del servicio.
-- **Definición**: Cada Servicio puede declarar `search_mode` con valores:
-  - `employee`: el cliente debe elegir un `empleado_id` y no puede enviar `equipo_id`.
-  - `equipment`: el cliente debe elegir un `equipo_id` y no puede enviar `empleado_id`.
-  - `general`: el cliente no debe elegir recursos específicos; la API opera en modo pool y agrega slots de todos los empleados calificados.
-- **Validación (Gerente)**: `gestionar_busqueda_disponibilidad` valida el `search_mode` si está presente en la definición del servicio y en caso de incoherencia levanta `ValueError` con mensaje claro. El Director (`main.buscar_disponibilidad`) lo mapea a `HTTP 400`.
-- **Ejecución de Pool (general)**:
-  - Si el servicio declara `equipos_compatibles`, la API autoasigna equipo por intersección por empleado y omite empleados sin match.
-  - Si el servicio no declara `equipos_compatibles`, la API devuelve slots con `equipo_id_asignado = null`.
-- **Compatibilidad**: Para no romper casos existentes, la validación sólo aplica si el servicio define explícitamente `search_mode`. El valor por defecto en escenarios sin esa propiedad es comportamiento previo (sin validación de política).
+- El campo `search_mode` queda deprecado y eliminado de escenarios y documentación. El comportamiento se deriva exclusivamente por los filtros presentes en la solicitud (`empleado_id`, `equipo_id`).
+- Efectos:
+  - La validación rechaza únicamente incompatibilidades (p. ej., `equipo_id` no compatible con `equipos_compatibles` del servicio).
+  - La deduplicación y el balanceo siguen las reglas descritas en Derivación por Filtros.
+  - Los tests y escenarios fueron actualizados para operar sin `search_mode`.

@@ -20,6 +20,7 @@ from .fixtures import load_scenario
 from .api.adapter import build_total_blockings
 from .api.adapter import gestionar_busqueda_disponibilidad
 from .api.adapter import gestionar_creacion_reserva
+from .api.adapter import gestionar_creacion_bloqueo
 
 app = FastAPI(title="Telensor Engine API", version="0.1.0")
 logging.basicConfig(level=logging.INFO)
@@ -104,6 +105,51 @@ class ReservaCreada(BaseModel):
     fin_slot: datetime
     creada_en: datetime
     version: int = 1
+
+
+class BloqueoScope(str, Enum):
+    business = "business"
+    employee = "employee"
+    equipment = "equipment"
+    service = "service"
+
+
+class SolicitudBloqueo(BaseModel):
+    """Modelo para registrar bloqueos operativos.
+
+    Validaciones:
+    - Si scope es employee, equipment o service, la lista correspondiente no puede ser vacía.
+    """
+
+    inicio_utc: datetime
+    fin_utc: datetime
+    motivo: str
+    scope: BloqueoScope
+    empleado_ids: Optional[List[str]] = None
+    equipo_ids: Optional[List[str]] = None
+    servicio_ids: Optional[List[str]] = None
+
+    model_config = ConfigDict(extra="forbid")
+
+    def validate_ids(self) -> None:
+        if self.scope == BloqueoScope.employee and not (self.empleado_ids and len(self.empleado_ids) > 0):
+            raise ValueError("Scope employee requiere empleado_ids no vacíos")
+        if self.scope == BloqueoScope.equipment and not (self.equipo_ids and len(self.equipo_ids) > 0):
+            raise ValueError("Scope equipment requiere equipo_ids no vacíos")
+        if self.scope == BloqueoScope.service and not (self.servicio_ids and len(self.servicio_ids) > 0):
+            raise ValueError("Scope service requiere servicio_ids no vacíos")
+
+
+class ProcesadaReserva(BaseModel):
+    reserva_id: str
+    estado: str
+    empleado_id: Optional[str] = None
+    equipo_id: Optional[str] = None
+
+
+class RespuestaBloqueo(BaseModel):
+    bloqueo_id: str
+    procesadas: List[ProcesadaReserva] = []
 
 
 @app.post("/api/v1/disponibilidad", response_model=RespuestaDisponibilidad)
@@ -327,3 +373,47 @@ async def crear_reserva(solicitud: SolicitudReserva) -> ReservaCreada:
         raise HTTPException(status_code=400, detail=msg or "Error de validación en la creación de reserva")
 
     return ReservaCreada(**creada)
+
+
+@app.post("/api/v1/bloqueos", response_model=RespuestaBloqueo, status_code=201)
+async def crear_bloqueo(solicitud: SolicitudBloqueo) -> RespuestaBloqueo:
+    """Registra un bloqueo operativo y aplica cascada de resolución.
+
+    - Valida el alcance y las listas de IDs cuando corresponda.
+    - Delegación al Gerente de bloqueos para persistir y ejecutar acciones.
+    """
+    if solicitud.fin_utc <= solicitud.inicio_utc:
+        raise HTTPException(status_code=400, detail="Rango de fechas inválido para el bloqueo")
+
+    # Validaciones de listas según scope
+    try:
+        solicitud.validate_ids()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    payload = {
+        "inicio_utc": solicitud.inicio_utc,
+        "fin_utc": solicitud.fin_utc,
+        "motivo": solicitud.motivo,
+        "scope": solicitud.scope.value,
+        "empleado_ids": solicitud.empleado_ids or [],
+        "equipo_ids": solicitud.equipo_ids or [],
+        "servicio_ids": solicitud.servicio_ids or [],
+    }
+    try:
+        resultado = gestionar_creacion_bloqueo(payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    # Mapear a modelo de respuesta
+    return RespuestaBloqueo(
+        bloqueo_id=str(resultado.get("bloqueo_id")),
+        procesadas=[
+            ProcesadaReserva(
+                reserva_id=p.get("reserva_id"),
+                estado=p.get("estado"),
+                empleado_id=p.get("empleado_id"),
+                equipo_id=p.get("equipo_id"),
+            )
+            for p in (resultado.get("procesadas") or [])
+        ],
+    )

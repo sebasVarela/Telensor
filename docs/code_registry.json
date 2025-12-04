@@ -127,7 +127,23 @@
   }
   ,
   {
+    "name": "seleccionar_equipo_por_politica",
+    "kind": "function",
+    "location": {"file": "telensor_engine/api/adapter.py"},
+    "module": "telensor_engine.api.adapter",
+    "status": "active"
+  }
+  ,
+  {
     "name": "gestionar_creacion_reserva",
+    "kind": "function",
+    "location": {"file": "telensor_engine/api/adapter.py"},
+    "module": "telensor_engine.api.adapter",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "gestionar_creacion_bloqueo",
     "kind": "function",
     "location": {"file": "telensor_engine/api/adapter.py"},
     "module": "telensor_engine.api.adapter",
@@ -144,6 +160,15 @@
   }
   ,
   {
+    "name": "crear_bloqueo",
+    "kind": "fastapi_endpoint",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "wraps": "telensor_engine.api.adapter.gestionar_creacion_bloqueo",
+    "status": "active"
+  }
+  ,
+  {
     "name": "SolicitudReserva",
     "kind": "class",
     "location": {"file": "telensor_engine/main.py"},
@@ -152,7 +177,39 @@
   }
   ,
   {
+    "name": "SolicitudBloqueo",
+    "kind": "class",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "status": "active"
+  }
+  ,
+  {
     "name": "ReservaCreada",
+    "kind": "class",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "RespuestaBloqueo",
+    "kind": "class",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "ProcesadaReserva",
+    "kind": "class",
+    "location": {"file": "telensor_engine/main.py"},
+    "module": "telensor_engine.main",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "BloqueoScope",
     "kind": "class",
     "location": {"file": "telensor_engine/main.py"},
     "module": "telensor_engine.main",
@@ -208,10 +265,42 @@
   }
   ,
   {
+    "name": "update_reserva",
+    "kind": "function",
+    "location": {"file": "telensor_engine/mock_state.py"},
+    "module": "telensor_engine.mock_state",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "add_bloqueo",
+    "kind": "function",
+    "location": {"file": "telensor_engine/mock_state.py"},
+    "module": "telensor_engine.mock_state",
+    "status": "active"
+  }
+  ,
+  {
+    "name": "get_bloqueos_intersecting",
+    "kind": "function",
+    "location": {"file": "telensor_engine/mock_state.py"},
+    "module": "telensor_engine.mock_state",
+    "status": "active"
+  }
+  ,
+  {
     "name": "get_horarios_empleados",
     "kind": "function",
     "location": {"file": "telensor_engine/mock_db.py"},
     "module": "telensor_engine.mock_db",
     "status": "active"
+  }
+  ,
+  {
+    "name": "SearchModePolicy",
+    "kind": "class",
+    "location": {"file": "docs/Telensor_Engine.md"},
+    "module": "docs",
+    "status": "deprecated"
   }
 ]

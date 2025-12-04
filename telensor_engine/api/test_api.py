@@ -25,7 +25,6 @@ def test_api_baseline_returns_slots(monkeypatch):
             "duracion": 30,
             "buffer_previo": 10,
             "buffer_posterior": 5,
-            "search_mode": "general",
         },
     )
 
@@ -78,7 +77,7 @@ def test_api_filter_by_employee(monkeypatch):
         ],
     )
 
-    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "search_mode": "employee"})
+    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5})
     monkeypatch.setattr(api, "get_ocupaciones", lambda e, fi, ff: [])
 
     payload = {
@@ -105,7 +104,7 @@ def test_api_heavy_occupancy_returns_empty(monkeypatch):
             {"empleado_id": "E2", "horario_trabajo": [600, 1080]},
         ],
     )
-    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "search_mode": "general"})
+    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5})
 
     def occ_full(empleados, fi, ff):
         # Ocupa toda la ventana solicitada para todos los empleados
@@ -134,7 +133,7 @@ def test_api_cross_midnight_slots(monkeypatch):
             {"empleado_id": "N1", "horario_trabajo": [0, 120]},
         ],
     )
-    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "search_mode": "general"})
+    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5})
     monkeypatch.setattr(api, "get_ocupaciones", lambda e, fi, ff: [])
 
     payload = {
@@ -154,7 +153,7 @@ def test_api_equipment_id_passthrough(monkeypatch):
     from telensor_engine import main as api
 
     monkeypatch.setattr(api, "get_horarios_empleados", lambda fecha, servicio_id=None, equipo_id=None: [{"empleado_id": "E1", "horario_trabajo": [540, 1020]}])
-    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "search_mode": "equipment"})
+    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5})
     monkeypatch.setattr(api, "get_ocupaciones", lambda e, fi, ff: [])
 
     payload = {
@@ -171,15 +170,15 @@ def test_api_equipment_id_passthrough(monkeypatch):
 
 
 def test_api_strict_filter_returns_empty_when_no_qualified_employees():
-    """Con modo estricto, si ningún empleado califica por servicio/equipo, no hay slots."""
+    """Con filtrado por equipo sin empleado, si ningún empleado califica por servicio/equipo, no hay slots."""
     # Usamos la función por defecto de mock_db (sin monkeypatch) para filtrar:
     # - E1: servicios [SVC1,SVC2], equipos [EQ1]
     # - E2: servicios [SVC2], equipos [EQ1,EQ2]
     # Para servicio SVC1 con equipo EQ2, ningún empleado cumple ambos filtros.
-    # Forzamos el modo 'equipment' para validar el filtro por equipo sin empleado.
+    # Validamos el filtro por equipo sin empleado.
     monkeypatch = pytest.MonkeyPatch()
     from telensor_engine import main as api
-    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5, "search_mode": "equipment"})
+    monkeypatch.setattr(api, "get_servicio", lambda sid: {"id": sid, "duracion": 30, "buffer_previo": 10, "buffer_posterior": 5})
 
     payload = {
         "servicio_id": "SVC1",

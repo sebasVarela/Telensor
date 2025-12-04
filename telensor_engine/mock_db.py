@@ -9,6 +9,10 @@ def get_servicio(servicio_id: str) -> Dict:
         "duracion": 30,
         "buffer_previo": 10,
         "buffer_posterior": 5,
+        # Política de selección de equipo por defecto.
+        # Valores: "service_order" (prioriza orden en equipos_compatibles)
+        #          "least_loaded" (equipo con menos minutos ocupados en el día)
+        "equipo_selection_policy": "service_order",
     }
 
 

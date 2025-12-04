@@ -12,7 +12,7 @@ def test_pool_general_picks_least_loaded():
     Escenario: load_balance_demo
     - E_A: 60 minutos ocupados (09:00-10:00)
     - E_B: 15 minutos ocupados (09:30-09:45)
-    Servicio: SVC_LBG (search_mode=general, sin equipos requeridos)
+    Servicio: SVC_LBG (sin equipos requeridos; pool general sin filtros)
     """
 
     payload = {
@@ -48,7 +48,7 @@ def test_equipment_mode_picks_least_loaded():
 
     Escenario: load_balance_demo
     Equipo: EQ_LB
-    Servicio: SVC_LBEQ (search_mode=equipment, requiere EQ_LB)
+    Servicio: SVC_LBEQ (requiere equipo; filtrado por `equipo_id=EQ_LB`)
     """
 
     payload = {
@@ -75,7 +75,7 @@ def test_tiebreaker_general_prefers_lower_id_when_equal_load():
     debe seleccionar determinísticamente el empleado con menor id lexicográfico.
 
     Escenario: tie_break_demo (ambos empleados sin ocupaciones, misma carga=0)
-    Servicio: SVC_TB (search_mode=general)
+    Servicio: SVC_TB (pool general sin filtros)
     """
 
     payload = {

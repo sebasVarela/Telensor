@@ -48,20 +48,24 @@ class Reserva:
     inicio_slot: datetime
     fin_slot: datetime
     creada_en: datetime
+    estado: str = "confirmada"
+    scenario_id: Optional[str] = None
     version: int = 1
 
 
 # Estado en memoria
 MOCK_RESERVAS: List[Reserva] = []
 MOCK_INACTIVIDADES: List[Dict[str, Any]] = []  # Espacio para inactividades futuras
+MOCK_BLOQUEOS: List[Dict[str, Any]] = []  # Bloqueos operativos (business/employee/equipment/service)
 
 
 def reset_state() -> None:
     """Resetea el estado de memoria (reservas e inactividades)."""
-    global MOCK_RESERVAS, MOCK_INACTIVIDADES
+    global MOCK_RESERVAS, MOCK_INACTIVIDADES, MOCK_BLOQUEOS
     with _lock:
         MOCK_RESERVAS = []
         MOCK_INACTIVIDADES = []
+        MOCK_BLOQUEOS = []
 
 
 def _gen_reserva_id() -> str:
@@ -113,6 +117,7 @@ def add_reserva(
     equipo_id: Optional[str],
     inicio_slot: datetime,
     fin_slot: datetime,
+    scenario_id: Optional[str] = None,
 ) -> Reserva:
     """Agrega una reserva al estado si no existe conflicto.
 
@@ -138,6 +143,106 @@ def add_reserva(
             inicio_slot=inicio_slot,
             fin_slot=fin_slot,
             creada_en=datetime.now(timezone.utc),
+            scenario_id=scenario_id,
         )
         MOCK_RESERVAS.append(reserva)
         return reserva
+
+
+def update_reserva(
+    *,
+    reserva_id: str,
+    empleado_id: Optional[str] = None,
+    equipo_id: Optional[str] = None,
+    estado: Optional[str] = None,
+) -> Optional[Reserva]:
+    """Actualiza campos de una reserva existente.
+
+    Si no se encuentra, retorna None.
+    """
+    with _lock:
+        for r in MOCK_RESERVAS:
+            if r.reserva_id == reserva_id:
+                if empleado_id is not None:
+                    r.empleado_id = empleado_id
+                if equipo_id is not None:
+                    r.equipo_id = equipo_id
+                if estado is not None:
+                    r.estado = estado
+                return r
+    return None
+
+
+def add_bloqueo(bloqueo: Dict[str, Any]) -> Dict[str, Any]:
+    """Agrega un bloqueo operativo en memoria.
+
+    Espera claves: inicio_utc (datetime), fin_utc (datetime), motivo (str),
+    scope ("business"|"employee"|"equipment"|"service"), y listas opcionales
+    empleado_ids, equipo_ids, servicio_ids.
+    """
+    with _lock:
+        bloqueo_id = f"B-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}-{len(MOCK_BLOQUEOS)+1}"
+        rec = dict(bloqueo)
+        rec["id"] = bloqueo_id
+        MOCK_BLOQUEOS.append(rec)
+        return rec
+
+
+def get_bloqueos_intersecting(
+    inicio_dt: datetime,
+    fin_dt: datetime,
+    recursos: Optional[Dict[str, List[str]]] = None,
+) -> List[Dict[str, Any]]:
+    """Devuelve bloqueos que se solapan con [inicio_dt, fin_dt) y, si se
+    especifican recursos, que aplican a esos IDs.
+
+    recursos puede incluir: empleado_ids, equipo_ids, servicio_ids.
+    Los bloqueos con scope="business" siempre aplican.
+    """
+    recursos = recursos or {}
+    empleados = set(recursos.get("empleado_ids", []) or [])
+    equipos = set(recursos.get("equipo_ids", []) or [])
+    servicios = set(recursos.get("servicio_ids", []) or [])
+
+    res: List[Dict[str, Any]] = []
+    for b in list(MOCK_BLOQUEOS):
+        bi = b.get("inicio_utc")
+        bf = b.get("fin_utc")
+        if not isinstance(bi, datetime) or not isinstance(bf, datetime):
+            continue
+        # Solapamiento temporal
+        if not (inicio_dt < bf and fin_dt > bi):
+            continue
+        sc = str(b.get("scope", "")).lower()
+        if sc == "business":
+            res.append(b)
+            continue
+        if sc == "employee":
+            ids = set(b.get("empleado_ids", []) or [])
+            if not ids:
+                continue
+            if not empleados:
+                # Si no se especifican recursos, consideramos que aplica
+                res.append(b)
+            elif ids & empleados:
+                res.append(b)
+            continue
+        if sc == "equipment":
+            ids = set(b.get("equipo_ids", []) or [])
+            if not ids:
+                continue
+            if not equipos:
+                res.append(b)
+            elif ids & equipos:
+                res.append(b)
+            continue
+        if sc == "service":
+            ids = set(b.get("servicio_ids", []) or [])
+            if not ids:
+                continue
+            if not servicios:
+                res.append(b)
+            elif ids & servicios:
+                res.append(b)
+            continue
+    return res

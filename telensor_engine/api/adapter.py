@@ -146,6 +146,37 @@ def build_total_blockings(
             rng = _to_minute_range(base_midnight, r.inicio_slot, r.fin_slot)
             bloqueos_equipo.setdefault(equipo_id, []).append(rng)
 
+    # 5) Bloqueos operativos persistidos en memoria (MOCK_BLOQUEOS)
+    #    Alcances soportados: business, employee, equipment, service
+    for b in list(getattr(mock_state, "MOCK_BLOQUEOS", [])):
+        bi = b.get("inicio_utc")
+        bf = b.get("fin_utc")
+        # Filtrar por intersección temporal con la búsqueda actual
+        if not (inicio_dt < bf and fin_dt > bi):
+            continue
+        scope = str(b.get("scope", "")).lower()
+        rng = _to_minute_range(base_midnight, bi, bf)
+        if scope == "business":
+            bloqueos_globales.append(rng)
+        elif scope == "employee":
+            ids = set(b.get("empleado_ids", []) or [])
+            # Si no se especifican IDs, afectar a todos los empleados considerados
+            if not ids:
+                for eid in empleados_ids:
+                    bloqueos_empleado.setdefault(eid, []).append(rng)
+            else:
+                for eid in empleados_ids:
+                    if eid in ids:
+                        bloqueos_empleado.setdefault(eid, []).append(rng)
+        elif scope == "equipment":
+            ids = set(b.get("equipo_ids", []) or [])
+            if equipo_id and (not ids or equipo_id in ids):
+                bloqueos_equipo.setdefault(equipo_id, []).append(rng)
+        elif scope == "service":
+            ids = set(b.get("servicio_ids", []) or [])
+            if servicio_id and (not ids or servicio_id in ids):
+                bloqueos_globales.append(rng)
+
     return bloqueos_empleado, bloqueos_equipo, bloqueos_globales
 
 
@@ -164,6 +195,71 @@ def _sumar_minutos_interseccion(intervalos: List[List[int]], ventana: List[int])
         if b > a:
             total += (b - a)
     return total
+
+
+def seleccionar_equipo_por_politica(
+    candidatos_eq: List[str],
+    servicio: Dict[str, Any],
+    servicio_id: Optional[str],
+    empleados_ids: List[str],
+    *,
+    base_midnight,
+    inicio_dt,
+    fin_dt,
+    ventana_base: List[int],
+    escenario: Optional[Dict[str, Any]] = None,
+    get_ocupaciones_fn: Optional[Callable[[List[str], Any, Any], List[Dict[str, Any]]]] = None,
+) -> Optional[str]:
+    """
+    Selecciona un equipo entre varios candidatos según la política declarada
+    en el servicio: "service_order" (por defecto) o "least_loaded".
+
+    - service_order: prioriza el orden de `equipos_compatibles` del servicio.
+      Desempate lexicográfico por `equipo_id`.
+    - least_loaded: selecciona el equipo con menos minutos ocupados en el
+      **día completo** (0-1440 relativo a `base_midnight`), usando `build_total_blockings` y
+      `_sumar_minutos_interseccion`. Desempate lexicográfico.
+
+    Retorna el `equipo_id` elegido o None si la lista está vacía.
+    """
+    if not candidatos_eq:
+        return None
+    if len(candidatos_eq) == 1:
+        return candidatos_eq[0]
+
+    policy = str(servicio.get("equipo_selection_policy", "service_order")).lower()
+
+    # Orden declarado por el servicio
+    svc_order: Dict[str, int] = {}
+    for idx, eq in enumerate(servicio.get("equipos_compatibles", []) or []):
+        svc_order[eq] = idx
+
+    if policy == "least_loaded":
+        # Medición de carga en el día completo relativo a `base_midnight`
+        ventana_dia = [0, 24 * 60]
+        cargas: List[Tuple[int, str]] = []
+        for eq_id in candidatos_eq:
+            _, bloqueos_eq, _ = build_total_blockings(
+                base_midnight=base_midnight,
+                inicio_dt=inicio_dt,
+                fin_dt=fin_dt,
+                escenario=escenario,
+                empleados_ids=empleados_ids,
+                equipo_id=eq_id,
+                servicio_id=servicio_id,
+                get_ocupaciones_fn=get_ocupaciones_fn,
+            )
+            carga = _sumar_minutos_interseccion(bloqueos_eq.get(eq_id, []), ventana_dia)
+            cargas.append((carga, eq_id))
+        cargas.sort(key=lambda x: (x[0], x[1]))
+        return cargas[0][1]
+
+    # Default: service_order
+    ranked = sorted(
+        candidatos_eq,
+        key=lambda eq: (svc_order.get(eq, 10_000), eq),
+    )
+    return ranked[0]
 
 
 def seleccionar_equipo_por_interseccion(servicio: Dict[str, Any], empleado: Dict[str, Any]) -> Optional[str]:
@@ -221,6 +317,7 @@ def gestionar_busqueda_disponibilidad(
     get_servicio_fn: Optional[Callable[[str], Dict[str, Any]]] = None,
     get_horarios_empleados_fn: Optional[Callable[..., List[Dict[str, Any]]]] = None,
     get_ocupaciones_fn: Optional[Callable[[List[str], Any, Any], List[Dict[str, Any]]]] = None,
+    excluir_empleado_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Función "Gerente" que realiza toda la lógica de búsqueda de disponibilidad.
@@ -268,36 +365,16 @@ def gestionar_busqueda_disponibilidad(
     duracion_servicio = int(servicio.get("duracion", 0))
     duracion_total_slot = buffer_previo + duracion_servicio + buffer_posterior
 
-    # Validación de política de búsqueda por servicio (search_mode)
-    # Estricto: todos los servicios tienen modo (por defecto 'general').
-    # Valores admitidos:
-    # - "employee": debe venir empleado_id; equipo_id es opcional.
-    # - "equipment": debe venir equipo_id; empleado_id es opcional.
-    # - "general": no pueden venir empleado_id ni equipo_id (pool automático).
-    search_mode = servicio.get("search_mode", "general")
+    # Derivación por filtros (sin search_mode):
+    # - Si viene `equipo_id`, se sigue el camino por equipo.
+    # - Si viene `empleado_id`, se sigue el camino por empleado.
+    # - Si no viene ninguno, se opera en pool general.
+    # Validación de compatibilidad de equipo cuando el servicio la declara.
     emp_present = bool(getattr(solicitud, "empleado_id", None))
     eq_present = bool(getattr(solicitud, "equipo_id", None))
-    if search_mode == "employee":
-        if not emp_present:
-            raise ValueError("Debe seleccionar un empleado")
-        # Modo estricto: no permitir enviar equipo_id en búsquedas por empleado
-        if eq_present:
-            raise ValueError("Modo empleado: no se permite seleccionar equipo")
-    elif search_mode == "equipment":
-        if not eq_present:
-            raise ValueError("Debe seleccionar un equipo")
-        # Validación estricta: si el servicio declara equipos_compatibles,
-        # el equipo solicitado debe estar en la lista; de lo contrario 400.
-        svc_compatibles = servicio.get("equipos_compatibles", []) or []
-        if svc_compatibles and getattr(solicitud, "equipo_id", None) not in svc_compatibles:
-            raise ValueError("Equipo no compatible para el servicio")
-        # Modo estricto: no permitir enviar empleado_id en búsquedas por equipo
-        if emp_present:
-            raise ValueError("Modo equipo: no se permite seleccionar empleado")
-        # empleado_id permitido opcionalmente; si viene, se filtra más abajo
-    elif search_mode == "general":
-        if emp_present or eq_present:
-            raise ValueError("Servicio de asignación automática (Pool). No seleccione recursos específicos")
+    svc_compatibles = servicio.get("equipos_compatibles", []) or []
+    if eq_present and svc_compatibles and getattr(solicitud, "equipo_id", None) not in svc_compatibles:
+        raise ValueError("Equipo no compatible para el servicio")
 
     # Horarios de empleados
     get_horarios_empleados = get_horarios_empleados_fn or default_get_horarios_empleados
@@ -325,6 +402,12 @@ def gestionar_busqueda_disponibilidad(
         )
     if getattr(solicitud, "empleado_id", None):
         horarios = [h for h in horarios if h.get("empleado_id") == solicitud.empleado_id]
+        if not horarios:
+            return []
+
+    # Excluir explícitamente al empleado bloqueado para cascada
+    if excluir_empleado_id:
+        horarios = [h for h in horarios if h.get("empleado_id") != excluir_empleado_id]
         if not horarios:
             return []
 
@@ -454,21 +537,17 @@ def gestionar_busqueda_disponibilidad(
 
         seleccionados: List[Dict[str, Any]] = []
         for (ini_iso, fin_iso, eq_id), lst in grupos.items():
-            # Determinar offset de día según inicio del slot
-            # Si el inicio está en el segundo día (>= base + 1440), usamos ventana [1440, 2880)
-            ini_dt_abs = lst[0]["inicio_slot"]
-            minutos_desde_base = int((ini_dt_abs - base_midnight).total_seconds() // 60)
-            day_offset = 1440 if minutos_desde_base >= 1440 else 0
-            ventana_dia = [day_offset, day_offset + 1440]
+            # Usar la ventana base solicitada para medir carga en lugar del día completo.
+            # Esto favorece al menos cargado dentro del rango de búsqueda efectivo
+            # y evita que slots consecutivos asignen al mismo empleado si causan solapes.
+            ventana_base = [inicio_min, fin_min]
 
-            # Elegir el empleado con menor minutos ocupados en esa ventana
             mejor = None
             mejor_carga = None
             for cand in lst:
                 eid = cand.get("empleado_id_asignado")
-                carga = _sumar_minutos_interseccion(bloqueos_por_empleado_base.get(eid, []), ventana_dia)
+                carga = _sumar_minutos_interseccion(bloqueos_por_empleado_base.get(eid, []), ventana_base)
                 if mejor is None or carga < mejor_carga:
-                    # Primer candidato o mejor por carga
                     mejor = cand
                     mejor_carga = carga
                 elif carga == mejor_carga:
@@ -481,14 +560,15 @@ def gestionar_busqueda_disponibilidad(
         seleccionados.sort(key=lambda s: s["inicio_slot"])  # ordenar por inicio
         return seleccionados
 
-    # Camino empleado específico sin equipo: selección inteligente por intersección
+    # Camino empleado específico sin equipo: probar todos los equipos compatibles del empleado
     if getattr(solicitud, "empleado_id", None) and not equipo_id_req:
         resultados_interseccion: List[Dict[str, Any]] = []
         for h in horarios:
             empleado_id = h["empleado_id"]
-            selected_eq = seleccionar_equipo_por_interseccion(servicio, h)
-            if not selected_eq:
-                # Estricto: si el servicio declara equipos_compatibles, NO hacer fallback.
+            equipos_match = obtener_equipos_compatibles_para_empleado(servicio, h)
+
+            if not equipos_match:
+                # Estricto: si el servicio declara equipos_compatibles, NO hacer fallback a slots sin equipo.
                 if servicio.get("equipos_compatibles"):
                     logging.info(
                         "Intersección: servicio %s requiere equipo; empleado %s sin match",
@@ -534,81 +614,102 @@ def gestionar_busqueda_disponibilidad(
                 # Pasamos al siguiente empleado
                 continue
 
-            # Configuración operativa del equipo seleccionado
-            equipo_operativo_abs: List[List[int]] = []
-            if escenario and "equipos" in escenario:
-                eq_list = escenario["equipos"]
-                eq_match = next((e for e in eq_list if e.get("equipo_id") == selected_eq), None)
-                if eq_match and isinstance(eq_match.get("horario_operativo"), list):
-                    op_ini, op_fin = eq_match["horario_operativo"]
-                    equipo_operativo_abs = [[op_ini + d, op_fin + d] for d in day_offsets]
-            if not equipo_operativo_abs:
-                equipo_operativo_abs = [[inicio_min, fin_min]]
-
-            # Bloqueos específicos del equipo seleccionado
-            _, bloqueos_por_equipo_cur, _ = build_total_blockings(
-                base_midnight=base_midnight,
-                inicio_dt=inicio_dt,
-                fin_dt=fin_dt,
-                escenario=escenario,
-                empleados_ids=empleados_ids,
-                equipo_id=selected_eq,
-                servicio_id=solicitud.servicio_id,
-                get_ocupaciones_fn=get_ocupaciones_fn,
-            )
-
+            # Probar todos los equipos compatibles del empleado para no omitir horarios por orden
             trabajo_ini, trabajo_fin = h["horario_trabajo"]
             intervalos_trabajo_abs = [[trabajo_ini + d, trabajo_fin + d] for d in day_offsets]
 
             bloqueos_emp = (bloqueos_por_empleado_base.get(empleado_id, []) or []) + (bloqueos_globales_base or [])
             libres_empleado = restar_intervalos(intervalos_trabajo_abs, bloqueos_emp)
-
-            bloqueos_eq = (bloqueos_por_equipo_cur.get(selected_eq, []) or []) + (bloqueos_globales_base or [])
-            libres_equipo = restar_intervalos(equipo_operativo_abs, bloqueos_eq)
-
             libres_emp_en_base = calcular_interseccion(libres_empleado, [[inicio_min, fin_min]])
-            libres_comunes_base = calcular_interseccion(libres_emp_en_base, libres_equipo)
 
-            for eff_ini, eff_fin in start_constraint_windows:
-                libres_para_pack = libres_comunes_base
-                if policy_value == "full_slot" and servicio_windows_abs:
-                    libres_para_pack = calcular_interseccion(libres_para_pack, servicio_windows_abs)
+            for eq_id in equipos_match:
+                equipo_operativo_abs: List[List[int]] = []
+                if escenario and "equipos" in escenario:
+                    eq_list = escenario["equipos"]
+                    eq_match = next((e for e in eq_list if e.get("equipo_id") == eq_id), None)
+                    if eq_match and isinstance(eq_match.get("horario_operativo"), list):
+                        op_ini, op_fin = eq_match["horario_operativo"]
+                        equipo_operativo_abs = [[op_ini + d, op_fin + d] for d in day_offsets]
+                if not equipo_operativo_abs:
+                    equipo_operativo_abs = [[inicio_min, fin_min]]
 
-                inicios_pre = encontrar_slots(
-                    [eff_ini, eff_fin],
-                    libres_para_pack,
-                    duracion_total_slot,
-                    buffer_previo,
-                    buffer_posterior,
+                # Bloqueos específicos del equipo actual
+                _, bloqueos_por_equipo_cur, _ = build_total_blockings(
+                    base_midnight=base_midnight,
+                    inicio_dt=inicio_dt,
+                    fin_dt=fin_dt,
+                    escenario=escenario,
+                    empleados_ids=empleados_ids,
+                    equipo_id=eq_id,
+                    servicio_id=solicitud.servicio_id,
+                    get_ocupaciones_fn=get_ocupaciones_fn,
                 )
 
-                for inicio_pre in inicios_pre:
-                    inicio_dt_abs = base_midnight.add(minutes=inicio_pre)
-                    fin_dt_abs = inicio_dt_abs.add(minutes=duracion_total_slot)
-                    resultados_interseccion.append(
-                        {
-                            "inicio_slot": inicio_dt_abs,
-                            "fin_slot": fin_dt_abs,
-                            "empleado_id_asignado": empleado_id,
-                            "equipo_id_asignado": selected_eq,
-                        }
+                bloqueos_eq = (bloqueos_por_equipo_cur.get(eq_id, []) or []) + (bloqueos_globales_base or [])
+                libres_equipo = restar_intervalos(equipo_operativo_abs, bloqueos_eq)
+
+                # Intersección empleado ∩ equipo
+                libres_comunes_base = calcular_interseccion(libres_emp_en_base, libres_equipo)
+
+                for eff_ini, eff_fin in start_constraint_windows:
+                    libres_para_pack = libres_comunes_base
+                    if policy_value == "full_slot" and servicio_windows_abs:
+                        libres_para_pack = calcular_interseccion(libres_para_pack, servicio_windows_abs)
+
+                    inicios_pre = encontrar_slots(
+                        [eff_ini, eff_fin],
+                        libres_para_pack,
+                        duracion_total_slot,
+                        buffer_previo,
+                        buffer_posterior,
                     )
 
-        # Deduplicación y retorno
-        seen_keys = set()
-        dedup_resultados: List[Dict[str, Any]] = []
+                    for inicio_pre in inicios_pre:
+                        inicio_dt_abs = base_midnight.add(minutes=inicio_pre)
+                        fin_dt_abs = inicio_dt_abs.add(minutes=duracion_total_slot)
+                        resultados_interseccion.append(
+                            {
+                                "inicio_slot": inicio_dt_abs,
+                                "fin_slot": fin_dt_abs,
+                                "empleado_id_asignado": empleado_id,
+                                "equipo_id_asignado": eq_id,
+                            }
+                        )
+
+        # Deduplicación por horario (inicio, fin) seleccionando un único equipo por slot para el empleado
+        grupos: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
         for r in resultados_interseccion:
-            key = (
-                r["inicio_slot"].isoformat(),
-                r["fin_slot"].isoformat(),
-                r.get("empleado_id_asignado"),
-                r.get("equipo_id_asignado"),
-            )
-            if key not in seen_keys:
-                seen_keys.add(key)
-                dedup_resultados.append(r)
-        dedup_resultados.sort(key=lambda s: s["inicio_slot"])  # ordenar por inicio
-        return dedup_resultados
+            k = (r["inicio_slot"].isoformat(), r["fin_slot"].isoformat())
+            grupos.setdefault(k, []).append(r)
+
+        svc_eqs: List[str] = servicio.get("equipos_compatibles", []) or []
+        seleccionados: List[Dict[str, Any]] = []
+        for _, lst in grupos.items():
+            # Preferir equipo según orden declarado por el servicio; desempate determinista por id
+            mejor = None
+            mejor_rank = None
+            for cand in lst:
+                eq_id = cand.get("equipo_id_asignado")
+                if eq_id is None:
+                    # Si el servicio no requiere equipo, cualquier candidato es válido; elegimos el primero por orden
+                    if mejor is None:
+                        mejor = cand
+                        mejor_rank = float("inf")
+                    continue
+                rank = svc_eqs.index(eq_id) if eq_id in svc_eqs else float("inf")
+                if mejor is None or rank < mejor_rank:
+                    mejor = cand
+                    mejor_rank = rank
+                elif rank == mejor_rank:
+                    # Tie-breaker determinista: menor equipo_id lexicográfico
+                    if str(eq_id) < str(mejor.get("equipo_id_asignado")):
+                        mejor = cand
+                        mejor_rank = rank
+            if mejor:
+                seleccionados.append(mejor)
+
+        seleccionados.sort(key=lambda s: s["inicio_slot"])  # ordenar por inicio
+        return seleccionados
 
     # Camino servicio-only (sin equipo): en modo pool general
     # - Si el servicio declara equipos_compatibles, intentamos autoasignación por intersección
@@ -723,31 +824,38 @@ def gestionar_busqueda_disponibilidad(
                         }
                     )
 
-    # Balanceo en Pool: agrupar y elegir el menos cargado
-    # Regla:
-    # - En modo general (search_mode=general): deduplicar por (inicio, fin) ignorando equipo.
-    # - En modos employee/equipment: deduplicar por (inicio, fin, equipo) cuando aplique.
+    # Balanceo y deduplicación:
+    # Regla por filtros:
+    # - Pool general (sin empleado_id ni equipo_id): deduplicar por (inicio, fin) ignorando equipo.
+    # - Con equipo_id especificado: deduplicar por (inicio, fin, equipo).
+    # - Con empleado_id especificado sin equipo: deduplicar por (inicio, fin, equipo) si el servicio requiere equipo; de lo contrario por (inicio, fin).
     grupos: Dict[Tuple[str, str, Optional[str]], List[Dict[str, Any]]] = {}
     for r in resultados:
-        if search_mode == "general":
-            # Ignorar el equipo para deduplicación: competencia es slot por slot.
-            k = (r["inicio_slot"].isoformat(), r["fin_slot"].isoformat(), None)
+        dedup_ignore_eq = False
+        if not emp_present and not eq_present:
+            dedup_ignore_eq = True
+        elif eq_present:
+            dedup_ignore_eq = False
         else:
-            k = (r["inicio_slot"].isoformat(), r["fin_slot"].isoformat(), r.get("equipo_id_asignado"))
+            # Solo empleado: ignorar equipo para aplicar política y devolver un único slot
+            dedup_ignore_eq = True
+        k = (
+            r["inicio_slot"].isoformat(),
+            r["fin_slot"].isoformat(),
+            None if dedup_ignore_eq else r.get("equipo_id_asignado"),
+        )
         grupos.setdefault(k, []).append(r)
 
     seleccionados: List[Dict[str, Any]] = []
     for (ini_iso, fin_iso, eq_id), lst in grupos.items():
-        ini_dt_abs = lst[0]["inicio_slot"]
-        minutos_desde_base = int((ini_dt_abs - base_midnight).total_seconds() // 60)
-        day_offset = 1440 if minutos_desde_base >= 1440 else 0
-        ventana_dia = [day_offset, day_offset + 1440]
+        # Medir carga dentro de la ventana base solicitada para la búsqueda
+        ventana_base = [inicio_min, fin_min]
 
         mejor = None
         mejor_carga = None
         for cand in lst:
             eid = cand.get("empleado_id_asignado")
-            carga = _sumar_minutos_interseccion(bloqueos_por_empleado_base.get(eid, []), ventana_dia)
+            carga = _sumar_minutos_interseccion(bloqueos_por_empleado_base.get(eid, []), ventana_base)
             if mejor is None or carga < mejor_carga:
                 mejor = cand
                 mejor_carga = carga
@@ -756,6 +864,43 @@ def gestionar_busqueda_disponibilidad(
                 if str(eid) < str(mejor.get("empleado_id_asignado")):
                     mejor = cand
                     mejor_carga = carga
+
+        # Si se está ignorando equipo en la deduplicación, aplicar política para elegir uno
+        # entre los candidatos del empleado seleccionado.
+        # Determinar si estamos en modo de ignorar equipo
+        dedup_ignore_eq_local = (eq_id is None)
+
+        if dedup_ignore_eq_local and servicio.get("equipos_compatibles"):
+            empleado_elegido = mejor.get("empleado_id_asignado")
+            # Equipos candidatos que generan el mismo slot para ese empleado
+            candidatos_eq = [
+                c.get("equipo_id_asignado")
+                for c in lst
+                if c.get("empleado_id_asignado") == empleado_elegido and c.get("equipo_id_asignado") is not None
+            ]
+            candidatos_eq = list(dict.fromkeys(candidatos_eq))  # unique, preserva orden
+            if candidatos_eq:
+                eq_elegido = seleccionar_equipo_por_politica(
+                    candidatos_eq,
+                    servicio,
+                    getattr(solicitud, "servicio_id", None),
+                    empleados_ids,
+                    base_midnight=base_midnight,
+                    inicio_dt=inicio_dt,
+                    fin_dt=fin_dt,
+                    ventana_base=ventana_base,
+                    escenario=escenario,
+                    get_ocupaciones_fn=get_ocupaciones_fn,
+                )
+                # Elegir el candidato que corresponde al equipo seleccionado
+                for c in lst:
+                    if (
+                        c.get("empleado_id_asignado") == empleado_elegido
+                        and c.get("equipo_id_asignado") == eq_elegido
+                    ):
+                        mejor = c
+                        break
+
         seleccionados.append(mejor)
 
     seleccionados.sort(key=lambda s: s["inicio_slot"])  # ordenar por inicio
@@ -810,19 +955,9 @@ def gestionar_creacion_reserva(
         raise ValueError("Rango del slot no coincide con duración+buffers del servicio")
 
     # Construir solicitud mínima de disponibilidad centrada en el slot,
-    # alineada con la política estricta de search_mode del servicio.
-    search_mode = svc.get("search_mode", "general")
-    emp_for_check = None
-    eq_for_check = None
-    if search_mode == "employee":
-        emp_for_check = getattr(solicitud, "empleado_id", None)
-        eq_for_check = getattr(solicitud, "equipo_id", None)
-    elif search_mode == "equipment":
-        # En modo equipo, no se incluye empleado en la búsqueda de confirmación
-        eq_for_check = getattr(solicitud, "equipo_id", None)
-    else:  # general
-        # En modo general, la confirmación del slot se hace sin recursos específicos
-        pass
+    # derivada únicamente por filtros presentes (sin search_mode).
+    emp_for_check = getattr(solicitud, "empleado_id", None)
+    eq_for_check = getattr(solicitud, "equipo_id", None)
 
     solicitud_disp = {
         "servicio_id": solicitud.servicio_id,
@@ -863,7 +998,8 @@ def gestionar_creacion_reserva(
             return False
         if s_fin != rq_fin:
             return False
-        if solicitud.empleado_id and slot.get("empleado_id_asignado") != solicitud.empleado_id:
+        # En presencia de filtros, exigir coincidencias específicas.
+        if getattr(solicitud, "empleado_id", None) and slot.get("empleado_id_asignado") != solicitud.empleado_id:
             return False
         if getattr(solicitud, "equipo_id", None) and slot.get("equipo_id_asignado") != solicitud.equipo_id:
             return False
@@ -888,6 +1024,7 @@ def gestionar_creacion_reserva(
         equipo_id=getattr(solicitud, "equipo_id", None),
         inicio_slot=solicitud.inicio_slot,
         fin_slot=solicitud.fin_slot,
+        scenario_id=getattr(solicitud, "scenario_id", None),
     )
 
     return {
@@ -900,3 +1037,139 @@ def gestionar_creacion_reserva(
         "creada_en": nueva.creada_en,
         "version": nueva.version,
     }
+
+
+def gestionar_creacion_bloqueo(solicitud_bloqueo: Dict[str, Any]) -> Dict[str, Any]:
+    """Registrar bloqueo operativo y aplicar cascada de resolución.
+
+    - Persiste en memoria el bloqueo.
+    - Detecta reservas que se solapan temporalmente y aplican al alcance.
+    - Intenta reasignar manteniendo el mismo slot exacto; si no se puede, marca PENDIENTE_REAGENDA.
+    """
+    bloqueo = mock_state.add_bloqueo(solicitud_bloqueo)
+    bi = bloqueo.get("inicio_utc")
+    bf = bloqueo.get("fin_utc")
+    scope = str(bloqueo.get("scope", "")).lower()
+    emp_ids = set(bloqueo.get("empleado_ids", []) or [])
+    eq_ids = set(bloqueo.get("equipo_ids", []) or [])
+    svc_ids = set(bloqueo.get("servicio_ids", []) or [])
+
+    procesadas: List[Dict[str, Any]] = []
+
+    for r in list(mock_state.list_reservas()):
+        # Intersección temporal
+        if not (r.inicio_slot < bf and r.fin_slot > bi):
+            continue
+        # Filtrado por alcance
+        aplica = False
+        if scope == "business":
+            aplica = True
+        elif scope == "employee":
+            aplica = (not emp_ids) or (r.empleado_id in emp_ids)
+        elif scope == "equipment":
+            aplica = (not eq_ids) or (r.equipo_id and r.equipo_id in eq_ids)
+        elif scope == "service":
+            aplica = (not svc_ids) or (r.servicio_id in svc_ids)
+        if not aplica:
+            continue
+
+        # Cascada: negocio -> agenda pendiente directa
+        if scope == "business":
+            mock_state.update_reserva(reserva_id=r.reserva_id, estado="PENDIENTE_REAGENDA")
+            procesadas.append({"reserva_id": r.reserva_id, "estado": "PENDIENTE_REAGENDA"})
+            continue
+
+        # Reasignar mismo slot excluyendo al empleado bloqueado.
+        # Preservar equipo si la reserva lo tiene y no está bloqueado explícitamente.
+        escenario_r = load_scenario(getattr(r, "scenario_id", None)) if getattr(r, "scenario_id", None) else None
+        if escenario_r and "servicios" in escenario_r and r.servicio_id in escenario_r["servicios"]:
+            svc_r = escenario_r["servicios"][r.servicio_id]
+        else:
+            svc_r = default_get_servicio(r.servicio_id)
+        equipo_req = r.equipo_id if (r.equipo_id and (scope != "equipment" or r.equipo_id not in eq_ids)) else None
+
+        disp_req = type("_Disp", (), {
+            "servicio_id": r.servicio_id,
+            "empleado_id": None,
+            "equipo_id": equipo_req,
+            "scenario_id": getattr(r, "scenario_id", None),
+            "fecha_inicio_utc": r.inicio_slot,
+            "fecha_fin_utc": r.fin_slot,
+            "service_window_policy": "start_only",
+        })()
+
+        try:
+            candidatos = gestionar_busqueda_disponibilidad(
+                solicitud=disp_req,
+                excluir_empleado_id=r.empleado_id,
+            )
+        except Exception:
+            candidatos = []
+
+        elegido = None
+        for c in candidatos:
+            c_ini = pendulum.instance(c.get("inicio_slot")).in_timezone("UTC")
+            c_fin = pendulum.instance(c.get("fin_slot")).in_timezone("UTC")
+            r_ini = pendulum.instance(r.inicio_slot).in_timezone("UTC")
+            r_fin = pendulum.instance(r.fin_slot).in_timezone("UTC")
+            if (
+                c_ini == r_ini
+                and c_fin == r_fin
+                and c.get("empleado_id_asignado") != r.empleado_id
+            ):
+                elegido = c
+                break
+
+        if elegido:
+            updated = mock_state.update_reserva(
+                reserva_id=r.reserva_id,
+                empleado_id=elegido.get("empleado_id_asignado"),
+                equipo_id=elegido.get("equipo_id_asignado"),
+                estado="REASIGNADA",
+            )
+            procesadas.append({
+                "reserva_id": r.reserva_id,
+                "estado": "REASIGNADA",
+                "empleado_id": updated.empleado_id if updated else None,
+                "equipo_id": updated.equipo_id if updated else None,
+            })
+        else:
+            # Fallback conservador: intentar reasignación directa a otro empleado
+            # elegible del escenario que no esté bloqueado ni en conflicto en memoria.
+            nuevo_emp: Optional[str] = None
+            if escenario_r and "empleados" in escenario_r:
+                for h in escenario_r["empleados"]:
+                    eid = h.get("empleado_id")
+                    if not eid or eid == r.empleado_id:
+                        continue
+                    # Filtrar por servicio asignado cuando se declara
+                    servs = h.get("servicios_asignados", []) or []
+                    if servs and r.servicio_id not in servs:
+                        continue
+                    # Validar conflicto en memoria (empleado/equipo)
+                    if not mock_state.has_conflict(
+                        empleado_id=eid,
+                        equipo_id=r.equipo_id,
+                        inicio_dt=r.inicio_slot,
+                        fin_dt=r.fin_slot,
+                    ):
+                        nuevo_emp = eid
+                        break
+
+            if nuevo_emp:
+                updated = mock_state.update_reserva(
+                    reserva_id=r.reserva_id,
+                    empleado_id=nuevo_emp,
+                    estado="REASIGNADA",
+                )
+                procesadas.append({
+                    "reserva_id": r.reserva_id,
+                    "estado": "REASIGNADA",
+                    "empleado_id": updated.empleado_id if updated else nuevo_emp,
+                    "equipo_id": updated.equipo_id if updated else r.equipo_id,
+                })
+            else:
+                mock_state.update_reserva(reserva_id=r.reserva_id, estado="PENDIENTE_REAGENDA")
+                procesadas.append({"reserva_id": r.reserva_id, "estado": "PENDIENTE_REAGENDA"})
+
+    return {"bloqueo_id": bloqueo.get("id"), "procesadas": procesadas}
